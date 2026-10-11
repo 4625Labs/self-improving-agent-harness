@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from harness_evolve.audit import run_confirmed  # noqa: E402
 from agent_agent46.policy_store import CLAIMS_COLLECTION, POLICY_COLLECTION  # noqa: E402
 from evals.run_eval import AUTO, MANUAL, REVIEW  # noqa: E402
 
@@ -126,7 +127,14 @@ class CourtDocket:
         self._cases.update_one({"case_id": case_id}, {"$set": updates})
         return self._get(case_id)
 
-    def verdict(self, case_id: str, expected_recommendation: str, critical: bool, by: str) -> dict:
+    def verdict(self, case_id: str, expected_recommendation: str, critical: bool, by: str, *,
+                confirmed: bool = False) -> dict:
+        """Writes docket.json. Needs confirmed=True; always audited."""
+        return run_confirmed(self._db, "court.verdict", by, case_id,
+                             {"expected": expected_recommendation, "critical": bool(critical)}, confirmed,
+                             lambda: self._verdict(case_id, expected_recommendation, critical, by))
+
+    def _verdict(self, case_id: str, expected_recommendation: str, critical: bool, by: str) -> dict:
         if expected_recommendation not in VALID_RECOMMENDATIONS:
             raise ValueError(f"expected_recommendation must be one of {sorted(VALID_RECOMMENDATIONS)}")
         case = self._get(case_id)
@@ -145,7 +153,12 @@ class CourtDocket:
         }})
         return self._get(case_id)
 
-    def dismiss(self, case_id: str, by: str, note: str = "") -> dict:
+    def dismiss(self, case_id: str, by: str, note: str = "", *, confirmed: bool = False) -> dict:
+        """Needs confirmed=True; always audited."""
+        return run_confirmed(self._db, "court.dismiss", by, case_id, {"note": note}, confirmed,
+                             lambda: self._dismiss(case_id, by, note))
+
+    def _dismiss(self, case_id: str, by: str, note: str) -> dict:
         case = self._get(case_id)
         if case["status"] == "convicted":
             raise ValueError(f"case {case_id} is already convicted")

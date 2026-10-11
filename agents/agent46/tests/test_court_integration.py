@@ -29,7 +29,7 @@ def test_convicted_case_reaches_dev_only_and_is_scored(tmp_path, monkeypatch):
     case = court.file_case(court.nominate("CLM9", "manual", "missed fraud")["case_id"])
     # filed but not convicted: nothing changes
     assert not court.docket_path.exists() or len(load_scenarios("dev")) == before
-    court.verdict(case["case_id"], "manual_review_required", True, "adjuster")
+    court.verdict(case["case_id"], "manual_review_required", True, "adjuster", confirmed=True)
     dev = load_scenarios("dev")
     assert len(dev) == before + 1
     assert any(s["id"] == f"court-{case['case_id']}" for s in dev)

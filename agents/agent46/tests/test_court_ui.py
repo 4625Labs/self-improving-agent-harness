@@ -103,7 +103,7 @@ def test_scan_file_verdict_flow(tmp_path):
     html = _post(c, f"/case/{cid}/file").text
     assert "Case file" in html and "review_recommended" in html
     html = _post(c, f"/case/{cid}/verdict", action="verdict", expected="manual_review_required",
-                 critical="1", adjuster="Ann").text
+                 critical="1", adjuster="Ann", confirm="1").text
     assert f"scenario written: court-{cid}" in html
     sc = json.loads((tmp_path / "docket.json").read_text())
     assert sc[0]["severity"] == "critical"
@@ -152,7 +152,7 @@ def test_heuristic_cycle_and_approve_reject(tmp_path):
     html = _post(c, "/cycle", proposer="heuristic").text
     assert calls == [] and "cycle finished" in html
     assert "Approve" in html or "no_change" in html
-    assert "not a candidate" in _post(c, "/version/1/reject").text
+    assert "not a candidate" in _post(c, "/version/1/reject", confirm="1").text
 
 
 def test_nominate_unknown_claim_rejected(tmp_path):
@@ -172,7 +172,7 @@ def test_dismiss_filed_case_needs_only_adjuster_and_forms_separate(tmp_path):
     assert 'name="adjuster" placeholder="adjuster (required)" required' not in html and 'placeholder="adjuster" required' not in html and "Adjuster name is required." in html
     assert html.count(f'action="/case/{cid}/verdict"') == 2
     assert "adjuster name is required" in _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="").text
-    assert "dismissed case" in _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="Ann").text
+    assert "dismissed case" in _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="Ann", confirm="1").text
     assert not (tmp_path / "docket.json").exists()
 
 

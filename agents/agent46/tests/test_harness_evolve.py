@@ -122,7 +122,7 @@ def test_low_risk_auto_activate_and_rollback(store):
     ops = [{"op": "add_keyword", "level": "high", "keyword": "arson"}]
     r = run_cycle(store, FixedProposer(ops), auto_activate_low_risk=True)
     assert r["gate"]["passed"] and r["risk"] == "low" and r["status"] == "active"
-    rollback(store, 1)
+    rollback(store, 1, confirmed=True)
     assert store.get_active()["version"] == 1
 
 
@@ -150,8 +150,8 @@ def test_needs_approval_not_auto_activated(store):
     assert store.get_active()["version"] == 1
     if r["gate"]["passed"]:
         assert r["status"] == "candidate"
-        approve(store, r["version"])
+        approve(store, r["version"], confirmed=True)
         assert store.get_active()["version"] == r["version"]
     else:
         with pytest.raises(ValueError):
-            approve(store, r["version"])
+            approve(store, r["version"], confirmed=True)

@@ -7,6 +7,7 @@ from agent_agent46.harness_config import HarnessConfigStore
 from evals.run_eval import compare, evaluate_all
 from evals.tool_eval import compare_tools, evaluate_tools_all
 
+from .audit import run_confirmed
 from .patch import PatchError, apply_patch, classify_risk
 from .proposer import RISK_OPS, SURFACES, TOOL_OPS
 
@@ -124,23 +125,47 @@ def run_cycle(store: HarnessConfigStore, proposer, auto_activate_low_risk: bool 
     }
 
 
-def approve(store: HarnessConfigStore, version: int) -> None:
-    """Human approval: activate a candidate whose gate passed."""
-    doc = store.get(version)
-    if not doc:
-        raise ValueError(f"no version {version}")
-    if doc["status"] != "candidate":
-        raise ValueError(f"version {version} is {doc['status']}, not a candidate")
-    if not (doc.get("scores", {}).get("gate") or {}).get("passed"):
-        raise ValueError(f"version {version} has no passing gate result")
-    store.activate(version)
+def _audit_db(store, audit_db):
+    if audit_db is not None:
+        return audit_db
+    db = getattr(store, "audit_db", None)
+    return db if db is not None else getattr(getattr(store, "_collection", None), "database", None)
 
 
-def rollback(store: HarnessConfigStore, to_version: int) -> None:
-    """Re-activate an older version (retires the current one)."""
-    doc = store.get(to_version)
-    if not doc:
-        raise ValueError(f"no version {to_version}")
-    if doc["status"] == "rejected":
-        raise ValueError(f"version {to_version} was rejected")
-    store.activate(to_version)
+def approve(store: HarnessConfigStore, version: int, *, confirmed: bool = False, actor: str = "unknown",
+            audit_db=None) -> None:
+    """Human approval: activate a candidate whose gate passed. Needs confirmed=True; always audited."""
+    def go() -> None:
+        doc = store.get(version)
+        if not doc:
+            raise ValueError(f"no version {version}")
+        if doc["status"] != "candidate":
+            raise ValueError(f"version {version} is {doc['status']}, not a candidate")
+        if not (doc.get("scores", {}).get("gate") or {}).get("passed"):
+            raise ValueError(f"version {version} has no passing gate result")
+        store.activate(version)
+    run_confirmed(_audit_db(store, audit_db), "manifest.approve", actor, version, {}, confirmed, go)
+
+
+def rollback(store: HarnessConfigStore, to_version: int, *, confirmed: bool = False, actor: str = "unknown",
+             audit_db=None) -> None:
+    """Re-activate an older version (retires the current one). Needs confirmed=True; always audited."""
+    def go() -> None:
+        doc = store.get(to_version)
+        if not doc:
+            raise ValueError(f"no version {to_version}")
+        if doc["status"] == "rejected":
+            raise ValueError(f"version {to_version} was rejected")
+        store.activate(to_version)
+    run_confirmed(_audit_db(store, audit_db), "manifest.rollback", actor, to_version, {}, confirmed, go)
+
+
+def reject(store: HarnessConfigStore, version: int, *, confirmed: bool = False, actor: str = "unknown",
+           audit_db=None) -> None:
+    """Human rejection of a candidate. Needs confirmed=True; always audited."""
+    def go() -> None:
+        doc = store.get(version)
+        if not doc or doc["status"] != "candidate":
+            raise ValueError(f"version {version} is not a candidate")
+        store.set_status(version, "rejected")
+    run_confirmed(_audit_db(store, audit_db), "manifest.reject", actor, version, {}, confirmed, go)

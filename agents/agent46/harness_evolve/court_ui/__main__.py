@@ -4,6 +4,8 @@ import argparse
 import os
 import sys
 
+from harness_evolve.audit import RemoteRefused, check_remote
+
 from .app import DEFAULT_DB, DEFAULT_URI, build_default_app
 
 
@@ -12,7 +14,14 @@ def main(argv=None) -> int:
     p.add_argument("--uri", default=os.environ.get("EVOLVE_MONGODB_URI") or os.environ.get("MONGODB_URI") or DEFAULT_URI)
     p.add_argument("--db", default=os.environ.get("MONGODB_DATABASE", DEFAULT_DB))
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--allow-remote", action="store_true",
+                   help="allow this UI to modify a non-local Mongo host (or set EVOLVE_ALLOW_REMOTE=1)")
     a = p.parse_args(argv)
+    try:
+        check_remote(a.uri, a.allow_remote)  # every UI action mutates
+    except RemoteRefused as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
     import uvicorn
 
     app = build_default_app(a.uri, a.db)

@@ -1,0 +1,166 @@
+[
+ {
+  "id": "lh01",
+  "kind": "legit",
+  "llm_steps": 1,
+  "tool_calls": 0,
+  "max_identical_calls": 0,
+  "expected": "complete",
+  "severity": "normal",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "lh02",
+  "kind": "legit",
+  "llm_steps": 7,
+  "tool_calls": 9,
+  "max_identical_calls": 2,
+  "expected": "complete",
+  "severity": "normal",
+  "tags": [
+   "claim_flow",
+   "parallel_calls"
+  ]
+ },
+ {
+  "id": "lh03",
+  "kind": "legit",
+  "llm_steps": 10,
+  "tool_calls": 11,
+  "max_identical_calls": 3,
+  "expected": "complete",
+  "severity": "normal",
+  "tags": [
+   "edge",
+   "baseline_limit",
+   "irregular"
+  ]
+ },
+ {
+  "id": "lh04",
+  "kind": "legit",
+  "llm_steps": 12,
+  "tool_calls": 13,
+  "max_identical_calls": 1,
+  "expected": "complete",
+  "severity": "critical",
+  "tags": [
+   "claim_flow",
+   "retry_after_error"
+  ]
+ },
+ {
+  "id": "lh05",
+  "kind": "legit",
+  "llm_steps": 11,
+  "tool_calls": 14,
+  "max_identical_calls": 2,
+  "expected": "complete",
+  "severity": "critical",
+  "tags": [
+   "claim_flow",
+   "mixed"
+  ]
+ },
+ {
+  "id": "lh06",
+  "kind": "legit",
+  "llm_steps": 13,
+  "tool_calls": 16,
+  "max_identical_calls": 1,
+  "expected": "complete",
+  "severity": "critical",
+  "tags": [
+   "claim_flow",
+   "multi_claim"
+  ]
+ },
+ {
+  "id": "lh07",
+  "kind": "legit",
+  "llm_steps": 6,
+  "tool_calls": 15,
+  "max_identical_calls": 1,
+  "expected": "complete",
+  "severity": "normal",
+  "tags": [
+   "fan_out"
+  ]
+ },
+ {
+  "id": "lh08",
+  "kind": "legit",
+  "llm_steps": 14,
+  "tool_calls": 13,
+  "max_identical_calls": 2,
+  "expected": "complete",
+  "severity": "critical",
+  "tags": [
+   "claim_flow",
+   "long"
+  ]
+ },
+ {
+  "id": "lh09",
+  "kind": "runaway",
+  "llm_steps": 15,
+  "tool_calls": 14,
+  "max_identical_calls": 1,
+  "expected": "capped",
+  "severity": "critical",
+  "tags": [
+   "slow_loop"
+  ]
+ },
+ {
+  "id": "lh10",
+  "kind": "runaway",
+  "llm_steps": 9,
+  "tool_calls": 21,
+  "max_identical_calls": 2,
+  "expected": "capped",
+  "severity": "critical",
+  "tags": [
+   "fan_out_storm"
+  ]
+ },
+ {
+  "id": "lh11",
+  "kind": "runaway",
+  "llm_steps": 7,
+  "tool_calls": 10,
+  "max_identical_calls": 4,
+  "expected": "capped",
+  "severity": "critical",
+  "tags": [
+   "identical_loop"
+  ]
+ },
+ {
+  "id": "lh12",
+  "kind": "runaway",
+  "llm_steps": 23,
+  "tool_calls": 22,
+  "max_identical_calls": 1,
+  "expected": "capped",
+  "severity": "critical",
+  "tags": [
+   "ping_pong"
+  ]
+ },
+ {
+  "id": "lh13",
+  "kind": "runaway",
+  "llm_steps": 4,
+  "tool_calls": 28,
+  "max_identical_calls": 3,
+  "expected": "capped",
+  "severity": "critical",
+  "tags": [
+   "fan_out_storm",
+   "extreme"
+  ]
+ }
+]

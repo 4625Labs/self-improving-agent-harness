@@ -3,8 +3,9 @@
 import copy
 from typing import Any
 
-from agent_agent46.harness_config import validate_manifest
+from agent_agent46.harness_config import INVARIANTS, validate_manifest
 from agent_agent46.tool_access import ALL_TOOLS, INTENTS, baseline_tool_access
+from agent_agent46.tool_limits import LIMIT_NAMES, baseline_limits
 
 # op name -> required fields (exactly these, no extras)
 OP_SCHEMA: dict[str, tuple[str, ...]] = {
@@ -14,8 +15,10 @@ OP_SCHEMA: dict[str, tuple[str, ...]] = {
     "add_keyword": ("level", "keyword"),
     "disable_tool": ("intent", "tool"),
     "enable_tool": ("intent", "tool"),
+    "set_limit": ("name", "value"),
 }
 # disable_tool only narrows privilege, so it is low risk. enable_tool widens it: needs a human.
+# set_limit is tiered by direction in classify_risk: lowering is low risk, raising needs a human.
 LOW_RISK_OPS = {"add_rule", "add_keyword", "disable_tool"}
 
 
@@ -85,13 +88,40 @@ def apply_patch(manifest: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str
                     raise PatchError(f"tool {tool!r} is already allowed for intent {intent!r}")
                 allow.append(tool)
                 allow.sort()
+        elif name == "set_limit":
+            lname, value = op["name"], op["value"]
+            if lname not in LIMIT_NAMES:
+                raise PatchError(f"unknown limit {lname!r}; allowed: {list(LIMIT_NAMES)}")
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PatchError(f"limit {lname!r} must be an integer")
+            lo, hi = INVARIANTS["limits_bounds"][lname]
+            if not lo <= value <= hi:
+                raise PatchError(f"limit {lname!r}={value} outside allowed range [{lo}, {hi}]")
+            if "limits" not in new:
+                new["limits"] = baseline_limits()
+            new["limits"][lname] = value
     errors = validate_manifest(new)
     if errors:
         raise PatchError("patched manifest violates invariants: " + "; ".join(errors))
     return new
 
 
-def classify_risk(ops: list[dict[str, Any]]) -> str:
-    """'low' only if every op is in LOW_RISK_OPS; any other op (e.g. enable_tool) needs a human."""
+def classify_risk(ops: list[dict[str, Any]], manifest: dict[str, Any] | None = None) -> str:
+    """'low' only if every op is low risk; any other op (e.g. enable_tool) needs a human.
+
+    set_limit is low risk only when it LOWERS a limit relative to `manifest` (the manifest the patch
+    applies to; ops are tracked in order). Raising a limit, or not knowing the current value
+    (manifest None), needs approval.
+    """
     validate_ops(ops)
-    return "low" if all(op["op"] in LOW_RISK_OPS for op in ops) else "needs_approval"
+    current = dict((manifest or {}).get("limits") or baseline_limits())
+    for op in ops:
+        if op["op"] in LOW_RISK_OPS:
+            continue
+        if op["op"] == "set_limit" and manifest is not None:
+            old, new = current.get(op["name"]), op["value"]
+            if isinstance(new, int) and not isinstance(new, bool) and isinstance(old, int) and new <= old:
+                current[op["name"]] = new
+                continue
+        return "needs_approval"
+    return "low"

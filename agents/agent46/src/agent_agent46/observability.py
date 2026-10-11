@@ -107,12 +107,25 @@ def tool_denied(
     track_event("tool_denied", tool=tool, intent=intent, session_id=session_id)
 
 
-def tool_limit_hit(rule: str, tool: Optional[str]) -> None:
-    track_event("tool_limit_hit", rule=rule, tool=tool)
+def tool_limit_hit(
+    rule: str,
+    tool: Optional[str],
+    *,
+    steps: Optional[int] = None,
+    calls: Optional[int] = None,
+    limit: Optional[int] = None,
+    harness_version: Any = None,
+) -> None:
+    """steps/calls are the turn's counts so far; limit is the cap that was hit (when known)."""
+    track_event("tool_limit_hit", rule=rule, tool=tool, steps=steps, calls=calls, limit=limit,
+                harness_version=harness_version)
 
 
-def step_cap_hit() -> None:
-    track_event("step_cap_hit")
+def step_cap_hit(
+    *, steps: Optional[int] = None, calls: Optional[int] = None, limit: Optional[int] = None,
+    harness_version: Any = None,
+) -> None:
+    track_event("step_cap_hit", steps=steps, calls=calls, limit=limit, harness_version=harness_version)
 
 
 def access_failed_open() -> None:

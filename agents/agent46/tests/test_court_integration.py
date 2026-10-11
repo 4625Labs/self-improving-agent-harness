@@ -36,3 +36,11 @@ def test_convicted_case_reaches_dev_only_and_is_scored(tmp_path, monkeypatch):
     assert all(not s["id"].startswith("court-") for s in load_scenarios("heldout"))
     res = evaluate(DEFAULT_MANIFEST, "dev")
     assert res["n"] == before + 1
+
+
+def test_court_writes_where_the_evaluator_reads(tmp_path, monkeypatch):
+    """Regression: EVOLVE_DOCKET_PATH was honoured by the reader only, so an isolated run wrote the real docket."""
+    target = tmp_path / "elsewhere.json"
+    monkeypatch.setenv("EVOLVE_DOCKET_PATH", str(target))
+    court = CourtDocket(_docket(tmp_path)._db)
+    assert court.docket_path == target

@@ -32,9 +32,13 @@ def _clean(doc):
 
 
 class CourtDocket:
-    def __init__(self, db, docket_path=DOCKET_PATH):
+    def __init__(self, db, docket_path=None):
         self._db = db
         self._cases = db[COURT_COLLECTION]
+        if docket_path is None:  # same override the evaluator reads, so reads and writes cannot diverge
+            from evals.run_eval import _docket_path
+
+            docket_path = _docket_path()
         self.docket_path = Path(docket_path)
 
     # -- helpers ---------------------------------------------------------

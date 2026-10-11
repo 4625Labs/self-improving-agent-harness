@@ -8,10 +8,11 @@ Everything marked **verified** was run on a local Docker stack. Anything else is
 designed, untested, or unknown. Section 6 starts with a five-minute way to check the headline
 numbers yourself.
 
-Repository: `4625Labs/self-improving-agent-harness` (private). This document describes the repository at
-commit `13f3323`. The code has not changed since the tool-access commit `38aa8da`; later commits
-only revise documentation, and a commit cannot cite its own hash, so the newest one may be a step
-ahead of this line.
+Repository: `4625Labs/self-improving-agent-harness` (private). The first build (risk and tool access)
+is described by commit `13f3323`. A second round of work added Raindrop observability, the
+Regression Court, a third evolvable surface (agent limits), an audit log and the guardrails; it is
+described in sections 5 and 9 and is in the commits after `4eecead` on `main`. A commit cannot cite
+its own hash, so use `git log` for the newest one. Test count at the time of writing: **536**.
 
 ---
 
@@ -119,6 +120,36 @@ that tells you it was broken.
 16. **Fail safe, and fail loudly.** If the store is unreachable the agent runs the baseline.
     Known gap: that fallback is currently silent apart from a log line.
 
+17. **Observability nominates, a human convicts, the evaluator decides.** Raindrop signals and
+    reviewer disagreements only nominate cases. A nominated case becomes a test scenario only after a
+    named adjuster rules on it. An LLM-judged signal never decides the gate.
+    *Broken when:* an unreviewed production event changes what the evaluator scores.
+    (`harness_evolve/court.py`.)
+
+18. **Read the diff, not only the gate.** The first LLM-proposed candidate (v4) passed the four-part
+    gate and still loosened two thresholds, one of which contradicted an adjuster's verdict. The gate
+    measures what the scenarios cover. A human reads what the patch actually changes.
+
+19. **Replay the world as it was.** A scenario rebuilt from today's data can silently differ from the
+    original decision (a later claim on the same policy changed the risk score, so the missed
+    fraud was no longer auto-approved on replay). Check that the stored decision and the replay agree
+    before convicting a case.
+
+20. **Destructive actions need a confirmation and leave a record.** Approve, reject, rollback,
+    verdict, dismiss, overturn and retract require an explicit confirmation and write an append-only
+    audit row, including refusals. Mutating commands refuse a non-local database unless told otherwise.
+    (`harness_evolve/audit.py`.)
+
+21. **Limits can evolve only inside human-owned bounds, and raising them is the risky direction.**
+    The step and tool-call caps are manifest data with fixed floors and ceilings. Lowering a limit is
+    low risk. Raising one needs approval and is never auto-activated. A limit that never resets must
+    not strand a half-finished claim, so claim-completing tools are exempt from the per-thread cap.
+    (`tool_limits.py`, `evals/limits_eval.py`.)
+
+22. **Tests must not read live state.** The real court docket holds an adjuster's convictions. Three
+    tests started failing when it changed. `tests/conftest.py` now points every test at an empty
+    docket. Any file that tests and humans both touch needs this.
+
 ---
 
 ## 3. Recreating this for a new problem
@@ -215,10 +246,24 @@ Everything in 3.3 then applies unchanged.
     │   └── llm.py            model selection
     ├── evals/                FIXED evaluators: risk (run_eval) and tool access (tool_eval)
     ├── harness_evolve/       proposer, patch language, cycle, CLI (never ships in the agent)
-    └── tests/                291 tests
+    └── tests/                536 tests
 ```
 
 `.claude/skills` and `.agents/skills` are the Agent Engine template's skill docs, kept as shipped.
+
+Added in the second round (all under `agents/agent46`):
+
+```
+src/agent_agent46/observability.py   Raindrop events; no-op without RAINDROP_WRITE_KEY
+src/agent_agent46/tool_limits.py     code-owned caps, resolve_limits, trace_from_messages
+harness_evolve/court.py              docket: nominate, file, verdict, overturn, retract, dismiss
+harness_evolve/court_ui/             localhost web docket (FastAPI), host-side only
+harness_evolve/audit.py              append-only audit log, confirmation guard, remote-host guard
+harness_evolve/budget.py             daily LLM call and token ledger
+evals/limits_eval.py                 third evaluator (24 dev, 13 held-out scenarios)
+evals/scenarios/docket.json          court convictions; merged into dev only (user data, untracked)
+tests/conftest.py                    isolates every test from the real docket
+```
 
 ---
 
@@ -258,7 +303,32 @@ model naming a tool it was not offered) is proven offline with a fake model, not
 | Held-out accuracy | 0.29 | 1.00 |
 | Critical violations (dev / held-out) | 23 / 10 | 0 / 0 |
 
-**Written but never run:** the LLM proposer. It makes network calls and was deliberately left off.
+**The LLM proposer has now run twice, on purpose.** The first call returned no JSON: the 600-token
+output cap was probably spent on hidden reasoning (unconfirmed, because the reply was not kept; it is now
+saved to `.evolve_cache/last_failed_reply.txt`). The second call, with `--max-tokens 2000`, produced
+candidate v4 (see section 9). Budget: one call per cycle, a capped prompt, a disk cache keyed by the
+prompt, a per-process limit and a daily ledger (10 calls, 50,000 tokens).
+
+**Built in the second round**
+
+- **Raindrop observability.** Events for every turn, risk assessment, review suspend and resume, tool
+  refusal, limit hit and manifest fallback, each tagged with `harness_version`. Off without a key.
+  Conversation text leaves the process only with `RAINDROP_SEND_CONTENT=true`; claim description
+  text is never sent, only its length. Verified live: events arrive in Raindrop.
+- **Regression Court** (section 9): nominate, file, human verdict, scenario in the dev split, cycle,
+  gate, approve. A web docket and a CLI drive the same code. Overturn and retract are audited.
+- **Limits as a third evolvable surface.** Steps per turn (baseline 10, bounds 4 to 20) and tool calls
+  per turn (baseline 12, bounds 6 to 30). Baseline limits eval: dev 0.667 (8 false caps), held-out
+  0.615, 0 missed caps. The heuristic proposer raises them to 14 and 18, which scores 1.0 on both and
+  passes the gate; a raise to 20 and 30 lets runaway traces through and fails it.
+- **Code-owned guardrails** that do not evolve: identical-call limit (3), per-thread cap (60, with a
+  claim-completing exemption), argument sanity, and the agent hand-off when the step cap is hit.
+- **Audit log, confirmations and a remote-host guard** for every destructive action.
+- **Platform guardrails enabled** (`features.guardrails: true`). Two starter guardrails (PII in
+  replies, prompt-injection phrases) exist as log-only and inactive. They are a separate layer from the
+  code limits: platform guardrails match text patterns at the LLM input and output only. Not yet
+  verified that an active guardrail fires.
+- **Held-out leak fixed.** Held-out failure ids are no longer stored in scores or reports.
 
 **Known limits**
 
@@ -289,6 +359,18 @@ model naming a tool it was not offered) is proven offline with a fake model, not
   keyword by substring, and only a code change (negation or word boundaries) fixes that.
 - The cross-user memory overwrite and the empty taxonomic extractions were observed on the local
   stack only. Check the hosted service before relying on either finding.
+- **Found in the second round:**
+  - The court builds a case file from today's data. If a later claim exists on the same policy the
+    replay can differ from the original decision. It should count only claims created before the one
+    being filed. Not fixed.
+  - `cycle --auto-activate-low-risk` activates without `--yes` and without an audit row.
+  - Platform guardrails are not tied to the manifest, so the harness cannot evolve them.
+  - The playground runs as `local-dev-user`, not the seeded test user, so it creates its own policy.
+    `agentengine dev` fallbacks and the memory identity caveat in section 6 still apply when deployed.
+  - The court UI has no login. Anyone who can reach localhost:8765 can type any adjuster name.
+  - "Negation" is still unhandled in `risk.py`: "no significant damage" matches the keyword.
+  - Raindrop's LLM-judged issues have not been exported into the court automatically; nomination from
+    Raindrop is manual (`court nominate <claim_id>`).
 
 ---
 
@@ -301,7 +383,7 @@ baseline manifest, so they do not depend on your database.
 
 | Command | Expect |
 |---|---|
-| `uv run pytest -q` | 291 passed. The tests that need the Docker stack skip themselves when it is not running. |
+| `uv run pytest -q` | 536 passed. The tests that need the Docker stack skip themselves when it is not running. |
 | `uv run python -m evals.run_eval --manifest baseline --split dev` | accuracy 0.68, 1 critical violation |
 | `uv run python -m evals.run_eval --manifest baseline --split heldout` | accuracy 0.40, 0 critical violations |
 | `uv run python -m evals.tool_eval --manifest baseline --split dev` | accuracy 0.258, 23 critical violations |
@@ -329,6 +411,46 @@ uv run python -m harness_evolve.cli approve 2
 uv run python -m harness_evolve.cli rollback 1
 ```
 
+### Second-round commands
+
+```bash
+cd agents/agent46
+export EVOLVE_MONGODB_URI="mongodb://localhost:<port>/?directConnection=true"   # port: agentengine dev status
+
+uv run python -m harness_evolve.court_ui --port 8765          # the docket, localhost only
+uv run python -m harness_evolve.cli court nominate CLM-1 --reason "..."
+uv run python -m harness_evolve.cli court scan                 # reviewer-disagreement nominations
+uv run python -m harness_evolve.cli court file <case>
+uv run python -m harness_evolve.cli --by NAME court verdict <case> manual_review_required --critical --yes
+uv run python -m harness_evolve.cli --by NAME court overturn <case> auto_approve --reason "..." --yes
+uv run python -m harness_evolve.cli --by NAME court retract <case> --reason "..." --yes
+uv run python -m harness_evolve.cli --surface risk cycle                    # free heuristic proposer
+uv run python -m harness_evolve.cli --proposer llm --dry-run cycle          # prompt + token estimate, no call
+uv run python -m harness_evolve.cli --proposer llm --max-tokens 2000 --surface risk cycle
+uv run python -m harness_evolve.cli budget                     # daily LLM budget left
+uv run python -m harness_evolve.cli --by NAME approve 5 --yes   # also reject V / rollback V
+uv run python -m harness_evolve.cli audit --n 20
+uv run python -m evals.limits_eval --manifest baseline --split dev
+```
+
+The verify-in-five-minutes numbers above hold only with an empty docket. Run them with
+`EVOLVE_DOCKET_PATH=/nonexistent.json`; the test suite does this for you.
+
+### Gotchas from the second round
+
+- **Hot reload does not re-read egress or env.** A new egress rule in `agent.yaml` and a new
+  `.env` value need `agentengine dev up` again. The proxy returns `403 Forbidden` for a domain not
+  on the list. Raindrop needs `api.raindrop.ai:443`.
+- **A new dependency needs the container to sync.** The 7-day cooldown in `uv.toml` can hold
+  `opentelemetry-instrumentation` back while `opentelemetry-instrumentation-logging` floats ahead, and
+  `import raindrop.analytics` then fails. `pyproject.toml` pins the logging package to match.
+- **`EVOLVE_DOCKET_PATH` must be honoured by the writer as well as the reader.** It was not, and an
+  isolated QA run wrote into the real docket. Fixed, with a regression test.
+- **Raindrop rejects an event whose input and output are both empty.**
+- **Shell checks of the container need its own interpreter:** `/tmp/agentic-venvs/.venv-aer-tool/bin/python`.
+- **A nominated claim id cannot be re-nominated** after its case is dismissed. Give the corrected
+  scenario a new claim id.
+- **The app logs the human-review pause (`GraphInterrupt`) at ERROR.** It is not a failure.
 - **Mongo from the host needs `?directConnection=true`.** The Docker Mongo advertises an internal
   hostname, so a plain `mongodb://localhost:<port>` times out. The port is assigned per machine.
 - **Invoking the agent needs a `user_id`.** Without one the runtime fails with
@@ -366,24 +488,23 @@ This lives in the Docker MongoDB, not in the repo, so a fresh checkout will not 
 
 ## 7. What to do next
 
-1. **Harden tool access.** Replace the keyword classifier with something harder to steer, tell the
-   model which tools it was not offered so a denial is not a surprise, and add trajectory scenarios
-   that run whole conversations through `build_agent(llm=fake)`. Make the eval set larger and less
-   regular, and tag critical cases sparingly.
-2. **Run the LLM proposer** for one cycle against a fresh baseline and compare it with the
-   heuristic one. Expect it to need a stricter parser than you think.
-3. **Grow the eval sets** and add scenarios the proposer has never seen.
-4. **Fix the held-out leak** by keeping held-out failure ids out of stored scores.
-5. **Make the fallback loud.** Surface the active manifest version in a status check, and log at
-   error level when the store is unreachable.
-6. **Handle negation in `risk.py`** so "no fire involved" stops matching the keyword.
-7. **Investigate the taxonomic extraction failures.** All five dead-lettered tasks failed with an
-   empty model response, and `explain_insurance_term` depends on that memory.
-8. **Make the gates consistent and keep an audit trail.** Use one critical-violation rule for every
-   surface, store patches that fail to apply as rejected records, and decide whether disable-only
-   tool patches should need approval until the tool scenarios grow.
-9. **Package this as a skill** once a second use case has been built by hand. Do not write the
-   skill from one example.
+Done since the first build: held-out leak, a loud fallback event (partly: it is an event, not yet an
+alert), the LLM proposer run, a second and third surface, an audit trail.
+
+1. **Make the court's case file faithful.** Count only claims created before the one being filed, and
+   refuse to convict a case whose replay disagrees with the stored decision.
+2. **Close the audit gap.** `--auto-activate-low-risk` must write an audit row, and consider requiring
+   approval for disable-only tool patches until the tool scenarios grow.
+3. ~~Run a limits cycle~~ **Done.** Candidate v6 raised the caps from 10/12 to 14/18 (a raise to 20/30 fails the gate). Approved by the operator and active locally.
+4. **Raindrop to court: partly done.** `court ingest-events FILE` turns an exported event list into advisory
+   nominations (`harness_evolve/raindrop_source.py`). Still manual: creating the custom signal in the
+   dashboard and exporting the events; no Raindrop read API is wired up.
+5. **Verify an active platform guardrail fires**, then decide whether text rules belong there.
+6. **Handle negation in `risk.py`** so "no significant damage" stops matching the keyword.
+7. **Harden tool access** (steerable classifier, trajectory scenarios) and **grow the eval sets**.
+8. **Make the gates consistent.** Use one critical-violation rule for every surface.
+9. **Auth on the court UI** and a named reviewer list before anyone but you uses it.
+10. **Package this as a skill** once a second use case has been built by hand.
 
 ---
 
@@ -405,3 +526,78 @@ This lives in the Docker MongoDB, not in the repo, so a fresh checkout will not 
 | One resolver (`resolve_tool_access`) shared by agent, guard and evaluator | three copies of the logic would drift apart |
 | Memory label separator is `::` | a plain `_` join lets two different (user, key) pairs collide |
 | `uv.lock` stays git-ignored | the template's convention: CI resolves fresh under its cooldown policy |
+| Raindrop nominates, a human convicts | LLM-judged signals are advisory; ground truth must be a person's ruling |
+| Limits are manifest data inside fixed bounds; raising needs approval | a higher cap is the costly direction, a lower one cannot strand a flow |
+| Behaviour limits stay in code, not in platform guardrails | platform guardrails match text only; they have no counters or tool stage |
+| Metadata-only events by default | customer text may contain personal data; content sending is opt-in |
+| Claim description text is never sent to Raindrop, only its length | the description is the most sensitive field |
+| Destructive actions need `--yes` / a confirm box and write an audit row | an accidental rollback and a polluted docket happened during testing |
+| The court docket lives outside the evolvable layer and outside the tests | it is human ground truth, so neither the proposer nor a test run may change it |
+| A rejected candidate keeps its record | the audit trail should show what the model proposed, not only what shipped |
+
+---
+
+## 9. Regression Court and Raindrop
+
+The loop that closes "collect" in the diagram in section 1. It was demonstrated end to end on the
+local stack.
+
+### The loop
+
+1. **Incident.** A $700 claim describing a vehicle stripped of wheels, catalytic converter and stereo is
+   auto-approved under manifest v3 (`CLM-DEMO11`). No reviewer sees it.
+2. **Nominate.** A person, the reviewer-disagreement scan (`court scan`) or a Raindrop signal nominates
+   the claim. Nominating changes nothing.
+3. **File.** `court file` rebuilds a draft scenario from the claim and policy in Mongo (amount, type,
+   description, the agent's recommendation, its `harness_version`, any reviewer resolution).
+4. **Verdict.** A named adjuster rules the expected outcome and whether it is critical. Only then is a
+   scenario written to `evals/scenarios/docket.json`, merged into the **dev split only**. A
+   scenario whose description equals a held-out description is rejected.
+5. **Cycle.** The proposer reads dev failures (including court cases) and proposes whitelisted ops.
+6. **Gate.** The unchanged gate scores the candidate on dev and held-out, on every surface it touches.
+7. **Read the diff.** A human reads what the patch changes (principle 18).
+8. **Approve.** `approve N --yes`, audited. Invariants still run at propose, activate and load.
+9. **Prove it live.** A claim of the same kind is sent through the playground and the stored claim
+   carries `harness_version` 5.
+
+### What happened in the demo
+
+| Step | Result |
+|---|---|
+| Baseline on dev with the new case | accuracy 0.793, critical violations 1, `court-b3e4bffe` failing |
+| LLM proposer, v4 (second call, 2000-token cap) | accuracy 0.862, held-out 0.8, gate **pass**, but it loosened `medium_amount` 5000 to 6000 and `high_score` 0.6 to 0.8, contradicting an adjuster verdict. **Rejected by a human.** |
+| Heuristic proposer, v5 | one op: add keyword `cannibalized` at high severity. Dev 0.793 to 0.828, critical 1 to 0, held-out unchanged, gate pass on risk, tools and limits. **Approved.** |
+| Live claim `CLM-96610` | `harness_version` 5, risk high, `manual_review_required`, suspended, reviewer denied, closed |
+
+### Raindrop events
+
+`agent_turn`, `risk_assessed`, `review_suspended`, `review_resumed`, `tool_denied`,
+`tool_limit_hit`, `step_cap_hit`, `tool_access_failed_open`, `manifest_fallback`. Each carries
+`harness_version` where known. Court actions, approvals and cycles are **not** sent to Raindrop; they
+are in the Mongo `audit_log`.
+
+### Cluster (MongoDB Atlas)
+
+Workspace `agent46` is linked to `Cluster0` through `agentengine atlas`. Status after the second round:
+
+| Step | State |
+|---|---|
+| Build and deploy of the second-round code | **done**: image `sha-095c995...`, revision r2, 5 of 5 components ready |
+| Deployed egress allow-list | **done**: `api.openai.com` and `api.raindrop.ai` on 443 (`agentengine egress`) |
+| Cloud secrets | **done**: `RAINDROP_WRITE_KEY` and `RAINDROP_SEND_CONTENT=false` added (project scope, via `--stdin`). Content sending is off in the cloud on purpose. |
+| Cloud invoke | **done**: an info question was answered by the deployed agent |
+| New code confirmed in runtime logs | **not confirmed**: the platform logs only startup lines, not turns. Check for an `agent_turn` event from the cloud in Raindrop. |
+| Manifests v1 to v6 in Atlas | **prepared, not yet applied**: `atlas-sync` (dry-run by default) copies v2 to v6 next to the cloud's own baseline v1 and leaves v6 as the single active version. Dry-run reviewed: 1 retire, 5 inserts. The operator runs the apply step. Needs `ATLAS_EVOLVE_URI` and `ATLAS_EVOLVE_DB` in `.env`. |
+| Court and docket against Atlas | **not done**: `harness_evolve --uri` takes the same string. `docket.json` is a file kept on the host. |
+
+Things learned while deploying:
+
+- `agentengine build` uploads the whole directory. `.agentengineignore` did not exclude `logs/`
+  (conversation text), `.evolve_cache/` (saved model replies) or `docket.json`. They are excluded now,
+  together with `harness_evolve/` and `tests/`, which do not run in the agent.
+- `agentengine invoke --user-id X` is refused with "end-user delegation is not enabled for this
+  project". Every cloud caller is the authenticated identity, which is the shared-identity caveat in section 6.
+- The platform's own database user cannot be used from the host: its password is not available.
+  Create a separate Atlas user for the evolve tooling.
+- `agentengine status` kept showing the previous deployment id after a successful redeploy.
+  Trust `agentengine deploy` output and `egress`, not that line.

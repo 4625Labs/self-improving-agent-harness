@@ -8,7 +8,7 @@ Everything marked **verified** was run on a local Docker stack. Anything else is
 designed, untested, or unknown. Section 6 starts with a five-minute way to check the headline
 numbers yourself.
 
-Repository: `4625Labs/self-improving-agent-harness` (private). The first build (risk and tool access)
+Repository: `4625Labs/self-improving-agent-harness` (public). The first build (risk and tool access)
 is described by commit `13f3323`. A second round of work added Raindrop observability, the
 Regression Court, a third evolvable surface (agent limits), an audit log and the guardrails; it is
 described in sections 5 and 9 and is in the commits after `4eecead` on `main`. A commit cannot cite

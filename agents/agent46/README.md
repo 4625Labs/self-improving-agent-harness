@@ -139,3 +139,19 @@ default/
     ├── harness_evolve/          proposer, patch language, cycle, CLI
     └── tests/
 ```
+
+## Raindrop signals into the court (advisory)
+
+Raindrop is advisory: it can suggest claims for the court to look at, but only a human verdict creates a scenario.
+
+1. In the Raindrop dashboard open app.raindrop.ai/signals and choose "New Signal".
+2. Describe it as "claim approved despite fraud-like cues" and set the sentiment to Negative.
+3. Export the matching events (including `claim_id`) to a JSON file, as a list or JSON lines.
+4. Preview with `uv run python -m harness_evolve.cli court ingest-events events.json --dry-run`, then run it without `--dry-run`.
+
+Each claim with a signal in the allow-list becomes a court case with source `raindrop_signal` (idempotent per claim) and an
+audit row `court.ingest`. `step_cap_hit` and `tool_limit_hit` events are printed as `limit_pressure` for the limits surface, not
+nominated, and `review_resumed` disagreements stay with `court scan`. Mutating runs against a non-local Mongo need `--allow-remote`.
+
+Not automated: there is no Raindrop read API wired up. Ingestion is from an exported file, or from events pasted from the
+Raindrop MCP into a file; nothing polls Raindrop.

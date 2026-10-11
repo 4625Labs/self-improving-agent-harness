@@ -110,7 +110,23 @@ whether a proposed harness change is safe, and a human approves it before it goe
 <section><h2>Convicted / Dismissed ({{ closed|length }})</h2><p class="cap">Decided.</p>
 {% for c in closed %}<div class="case"><b>{{ c.claim_id }}</b> {{ c.status }} {% if c.status == "convicted" %}: expected {{ c.expected_recommendation }}{% if c.critical %} (critical){% endif %}
 by {{ c.verdict_by }}<br><span class="muted">Scenario written: {{ c.draft.id }} to docket.json (dev split)</span>
-{% else %}by {{ c.dismissed_by }} {{ c.dismiss_note }}{% endif %}</div>
+{% else %}by {{ c.dismissed_by }} {{ c.dismiss_note }}{% endif %}
+{% if c.history %}<details><summary>History ({{ c.history|length }})</summary><ul>
+{% for h in c.history %}<li>{{ h.ts }} {{ h.action }} by {{ h.by }}: was {{ h.previous_expected }}{% if h.previous_critical %} (critical){% endif %}. Reason: {{ h.reason }}</li>{% endfor %}</ul></details>{% endif %}
+{% if c.status == "convicted" %}<h3>Overturn</h3>
+<form method="post" action="/case/{{ c.case_id }}/overturn" class="adj" novalidate>{{ tok() }}
+<select name="expected">{% for r in recs %}<option value="{{ r }}"{% if r == c.expected_recommendation %} selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+<label><input type="checkbox" name="critical" value="1"{% if c.critical %} checked{% endif %}> Critical</label><br>
+<input type="text" name="adjuster" placeholder="adjuster (required)"><br>
+<input type="text" name="reason" placeholder="reason (required)" required><br>
+<label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label>
+<button>Overturn</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form>
+<h3>Retract</h3>
+<form method="post" action="/case/{{ c.case_id }}/retract" class="adj" novalidate>{{ tok() }}
+<input type="text" name="adjuster" placeholder="adjuster (required)"><br>
+<input type="text" name="reason" placeholder="reason (required)" required><br>
+<label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label>
+<button>Retract</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form>{% endif %}</div>
 {% else %}<p class="muted">None.</p>{% endfor %}</section>
 </div>
 
@@ -249,6 +265,32 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
             return flash("err", f"expected must be one of {sorted(VALID_RECOMMENDATIONS)}")
         return guarded(lambda: "verdict recorded; scenario written: "
                        f"{court.verdict(case_id, expected, f.get('critical') == '1', adjuster, confirmed=confirmed)['draft']['id']}")
+
+    @app.post("/case/{case_id}/overturn")
+    async def overturn(case_id: str, request: Request):
+        f = await form(request)
+        adjuster, reason = f.get("adjuster", "").strip(), f.get("reason", "").strip()
+        if not adjuster:
+            return flash("err", "adjuster name is required")
+        if not reason:
+            return flash("err", "reason is required")
+        expected = f.get("expected", "")
+        if expected not in VALID_RECOMMENDATIONS:
+            return flash("err", f"expected must be one of {sorted(VALID_RECOMMENDATIONS)}")
+        return guarded(lambda: "verdict overturned; scenario updated: " + court.overturn(
+            case_id, expected, f.get("critical") == "1", adjuster, reason,
+            confirmed=f.get("confirm") == "1")["draft"]["id"])
+
+    @app.post("/case/{case_id}/retract")
+    async def retract(case_id: str, request: Request):
+        f = await form(request)
+        adjuster, reason = f.get("adjuster", "").strip(), f.get("reason", "").strip()
+        if not adjuster:
+            return flash("err", "adjuster name is required")
+        if not reason:
+            return flash("err", "reason is required")
+        return guarded(lambda: "verdict retracted; scenario removed: " + court.retract(
+            case_id, adjuster, reason, confirmed=f.get("confirm") == "1")["draft"]["id"])
 
     @app.post("/cycle")
     async def cycle(request: Request):

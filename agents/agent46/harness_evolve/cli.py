@@ -135,6 +135,11 @@ def _court_main(a, rest) -> int:
 
 
 def main(argv=None) -> int:
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] == "atlas-sync":  # own parser; a dry run needs no --allow-remote
+        from .atlas_sync import main as atlas_sync_main
+
+        return atlas_sync_main(args[1:])
     p = argparse.ArgumentParser(prog="harness_evolve")
     p.add_argument("--uri", default=os.environ.get("EVOLVE_MONGODB_URI") or os.environ.get("MONGODB_URI") or DEFAULT_URI)
     p.add_argument("--db", default=os.environ.get("MONGODB_DATABASE", DEFAULT_DB))
@@ -152,7 +157,7 @@ def main(argv=None) -> int:
     p.add_argument("--allow-remote", action="store_true",
                    help="allow mutating commands against a non-local Mongo host (or set EVOLVE_ALLOW_REMOTE=1)")
     p.add_argument("--n", type=int, default=20, help="rows for the `audit` command (default 20)")
-    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "reject", "court", "budget", "audit"])
+    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "reject", "court", "budget", "audit", "atlas-sync"])
     p.add_argument("version", nargs="?")  # int for approve/rollback/reject; the court action word for `court`
     a, rest = p.parse_known_args(argv)
     try:

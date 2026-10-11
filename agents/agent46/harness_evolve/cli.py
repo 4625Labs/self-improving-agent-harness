@@ -24,6 +24,49 @@ DEFAULT_URI = "mongodb://localhost:53087/?directConnection=true"
 DEFAULT_DB = "agent_agent46_local"
 
 
+def _load_events(path: str) -> list:
+    text = Path(path).read_text()
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, list) else [data]
+    except ValueError:
+        out = []
+        for line in text.splitlines():
+            if line.strip():
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    out.append(None)  # counted as skipped
+        return out
+
+
+def _ingest_events(a, c, by) -> int:
+    """Advisory: only nominates (source raindrop_signal); a human still decides every verdict."""
+    from pymongo import MongoClient
+
+    from .audit import record
+    from .court import CourtDocket
+    from .raindrop_source import SOURCE, analyse_events
+
+    res = analyse_events(_load_events(c.file), min_count=c.min_count)
+    print(json.dumps(res, indent=2, default=str))
+    if c.dry_run or a.dry_run:
+        return 0
+    check_remote(a.uri, a.allow_remote)
+    db = MongoClient(a.uri, serverSelectionTimeoutMS=2000)[a.db]
+    court, nominated = CourtDocket(db), 0
+    detail = {"candidates": len(res["candidates"]), "skipped": res["skipped"], "min_count": c.min_count}
+    try:
+        for cand in res["candidates"]:
+            court.nominate(cand["claim_id"], SOURCE, cand["reason"])
+            nominated += 1
+    except Exception as e:
+        record(db, "court.ingest", by, c.file, detail | {"nominated": nominated}, f"error: {e}")
+        raise
+    record(db, "court.ingest", by, c.file, detail | {"nominated": nominated}, "ok")
+    return 0
+
+
 def _court_main(a, rest) -> int:
     from pymongo import MongoClient
 
@@ -58,10 +101,16 @@ def _court_main(a, rest) -> int:
     r.add_argument("--reason", default="")
     ls = sub.add_parser("list")
     ls.add_argument("--status")
+    ie = sub.add_parser("ingest-events")
+    ie.add_argument("file")
+    ie.add_argument("--min-count", type=int, default=1)
+    ie.add_argument("--dry-run", action="store_true")
     c = cp.parse_args(rest)
     by = getattr(c, "by", None) or a.by or os_user()
     if c.action in ("verdict", "dismiss", "overturn", "retract") and not (getattr(c, "by", None) or a.by):
         print(f"note: --by not given; recording actor as OS user '{by}'", file=sys.stderr)
+    if c.action == "ingest-events":
+        return _ingest_events(a, c, by)
     if c.action != "list":
         check_remote(a.uri, a.allow_remote)
     court = CourtDocket(MongoClient(a.uri, serverSelectionTimeoutMS=2000)[a.db])

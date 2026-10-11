@@ -463,6 +463,17 @@ The verify-in-five-minutes numbers above hold only with an empty docket. Run the
   `AUTHORIZED_TOOLS policy denied tool "<name>"`. An organization policy cannot be widened from the
   project. The same engine has run caps (`MAX_TOOL_CALLS_PER_EXECUTION` and others) that overlap with the
   evolvable limits in section 5. This is not caused by `features.guardrails`, which is content guardrails.
+- **Platform guardrails (content): what was learned.** Created through the admin form or `POST /guardrails`
+  with type `output_validation`. Verified in the cloud on 2026-10-11: an input-stage guardrail with action
+  `block` stops a prompt-injection message before the agent runs ("Execution was denied by policy",
+  `error_code: policy_denied`); an output-stage guardrail with action `modify` and replacement text rewrites
+  a reply containing an SSN-like number (the reply became `[BLOCKED]`). Gotchas: a `log_only` guardrail never
+  increments `trigger_count` and leaves no trace, so it cannot be demonstrated; a guardrail saved as
+  inactive does nothing; the cloud has its own guardrail store, separate from the local one, so create each
+  guardrail in both. The SDK evaluator reads `config.regex_patterns` while the form writes `match_patterns`;
+  the platform translates between them (a form-only guardrail still blocked). `validate_llm_response` in the
+  agent is a pass-through in this SDK version. Raindrop does not receive guardrail events; they are visible
+  in the platform's Traces under the Guardrails filter.
 - **Atlas from the host can fail transiently.** A first connection saw only one of three nodes
   (`ReplicaSetNoPrimary`); a retry minutes later reached the primary. Retry before changing anything.
 - **A permission classifier may refuse writes to shared resources** (a cloud secret that sends

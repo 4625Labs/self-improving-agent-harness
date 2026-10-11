@@ -154,3 +154,14 @@ def test_llm_never_reads_heldout(tmp_path, monkeypatch):
     monkeypatch.setattr(proposer_mod, "load_scenarios", lambda s: seen.append(s) or real(s))
     _mk(tmp_path, Fake()).propose(copy.deepcopy(DEFAULT_MANIFEST), _dev()["failures"], {})
     assert seen and set(seen) == {"dev"}
+
+
+def test_unparseable_reply_is_saved_for_diagnosis(tmp_path):
+    import pytest
+    from harness_evolve.patch import PatchError
+    from harness_evolve.proposer import LLMProposer
+
+    p = LLMProposer(cache_dir=tmp_path, max_calls=3, client=lambda prompt, model, mt: "Sorry, I cannot help with that.")
+    with pytest.raises(PatchError, match="last_failed_reply"):
+        p.propose({"rules": [], "thresholds": {}, "keywords": {}}, [], {})
+    assert "cannot help" in (tmp_path / "last_failed_reply.txt").read_text()

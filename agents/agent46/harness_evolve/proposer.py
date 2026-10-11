@@ -202,7 +202,15 @@ def _default_client(prompt: str, model: str, max_tokens: int) -> str:
     if not key:
         raise RuntimeError("LLM_API_KEY is missing")
     llm = ChatOpenAI(model=model, api_key=SecretStr(key), use_responses_api=True, max_tokens=max_tokens)
-    return llm.invoke(prompt).text
+    msg = llm.invoke(prompt)
+    text = str(msg.text)
+    if not text.strip():
+        usage = getattr(msg, "usage_metadata", None) or {}
+        raise RuntimeError(
+            f"LLM returned empty text (usage={dict(usage)}). With a reasoning model the output cap "
+            f"({max_tokens}) can be spent on hidden reasoning; retry with a larger --max-tokens."
+        )
+    return text
 
 
 class LLMProposer:
@@ -318,7 +326,14 @@ class LLMProposer:
                 self.budget.release(reservation)  # no reply, so nothing was spent
                 raise
             self.budget.record(prompt_tokens + estimate_tokens(raw), reservation)
-            result = self.parse(raw)  # only cache replies that parse and validate
+            try:
+                result = self.parse(raw)  # only cache replies that parse and validate
+            except PatchError as e:
+                # Keep the reply so a paid call that fails to parse is diagnosable (cache dir is gitignored).
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                failed = self.cache_dir / "last_failed_reply.txt"
+                failed.write_text(raw[:4000])
+                raise PatchError(f"{e} (reply was {len(raw)} chars; first 4000 saved to {failed})") from e
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"model": self.model, "raw": raw}))
             return result

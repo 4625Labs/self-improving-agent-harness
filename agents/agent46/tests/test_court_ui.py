@@ -306,6 +306,10 @@ def test_every_label_appears_on_page(tmp_path):
     for key, label in _flat(UI_LABELS):
         if key in ("row_candidate", "author_limits"):  # shown only in special cases
             continue
+        if "{" in label or key.startswith(("op_", "group_", "tool_", "loosens", "no_", "risk_", "more_", "unknown", "show_tools", "impact_reasons")):
+            continue  # card content that depends on the ops; covered by the card tests
+        if label in UI_LABELS["thresholds"].values() or label in UI_LABELS["intents"].values() or label in UI_LABELS["limits"].values():
+            continue
         assert label in html, (key, label)
     assert "<td>Proposed change (awaiting approval)</td>" in html
 
@@ -369,3 +373,127 @@ def test_script_in_claim_text_still_escaped_with_new_labels(tmp_path):
     _post(c, f"/case/{_case_id(c)}/file")
     html = _post(c, "/cycle", proposer="heuristic").text
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;alert(1)" in html
+
+
+# --- proposed-change summary card ---
+from harness_evolve.court_ui.app import describe_ops  # noqa: E402
+
+
+def _one(op, manifest=None):
+    r = describe_ops([op], manifest)
+    assert len(r) == 1
+    return r[0]
+
+
+def test_describe_ops_every_op_type():
+    r = _one({"op": "add_keyword", "level": "high", "keyword": "cannibalized"})
+    assert r["group"] == "Risk rules" and r["text"] == 'Treat "cannibalized" as high-severity: send to manual review' and r["risk"] == "ok"
+    assert _one({"op": "add_keyword", "level": "medium", "keyword": "no witnesses"})["text"] == \
+        'Treat "no witnesses" as medium-severity: recommend review'
+    r = _one({"op": "add_rule", "id": "r1", "text": "Escalate staged accidents"})
+    assert r["group"] == "Risk rules" and "Escalate staged accidents" in r["text"] and r["risk"] == "ok"
+    r = _one({"op": "remove_rule", "id": "r1"})
+    assert "r1" in r["text"] and r["group"] == "Risk rules"
+    r = _one({"op": "set_threshold", "name": "medium_score", "value": 0.55}, {"thresholds": {"medium_score": 0.5}})
+    assert r["text"] == "Raise the review threshold for policy risk score from 0.50 to 0.55" and r["risk"] == "loosens"
+    r = _one({"op": "set_threshold", "name": "medium_score", "value": 0.3}, {"thresholds": {"medium_score": 0.5}})
+    assert r["text"].startswith("Lower the review threshold") and r["risk"] == "ok"
+    r = _one({"op": "set_limit", "name": "max_llm_steps_per_turn", "value": 14}, {"limits": {"max_llm_steps_per_turn": 10}})
+    assert r["group"] == "Agent limits" and r["text"] == "Allow up to 14 model steps per turn, up from 10" and r["risk"] == "loosens"
+    r = _one({"op": "set_limit", "name": "max_tool_calls_per_turn", "value": 6}, {"limits": {"max_tool_calls_per_turn": 12}})
+    assert r["text"] == "Cap at 6 tool calls per turn, down from 12" and r["risk"] == "ok"
+
+
+def test_describe_ops_tools_grouped_by_intent_and_enable_loosens():
+    tools = ["get_quote", "create_policy", "save_customer_info", "recall_customer_info", "send_notification"]
+    r = describe_ops([{"op": "disable_tool", "intent": "general", "tool": t} for t in tools])
+    assert len(r) == 1 and r[0]["text"] == "Stop offering 5 tools for general questions" and r[0]["group"] == "Tool access"
+    assert r[0]["tools"] == sorted(tools) and r[0]["risk"] == "ok"
+    r = describe_ops([{"op": "enable_tool", "intent": "claims", "tool": "get_quote"}])
+    assert r[0]["text"] == "Start offering 1 tool for claims" and r[0]["risk"] == "loosens"
+
+
+def test_describe_ops_default_baseline_and_groups_sorted():
+    r = describe_ops([{"op": "set_limit", "name": "max_llm_steps_per_turn", "value": 99},
+                      {"op": "set_threshold", "name": "high_score", "value": 0.9},
+                      {"op": "disable_tool", "intent": "info", "tool": "get_quote"}])
+    assert [d["group"] for d in r] == ["Risk rules", "Tool access", "Agent limits"]
+    assert r[0]["risk"] == "loosens" and r[2]["risk"] == "loosens"  # above the shipped baseline
+
+
+def test_describe_ops_unknown_and_malformed_never_raise():
+    r = describe_ops([{"op": "format_disk", "x": "<b>"}, "junk", {"op": "add_keyword"}, None], None)
+    assert len(r) == 4 and all(d["text"].startswith("Unknown change") for d in r)
+    assert describe_ops(None) == [] and describe_ops("x") == []
+
+
+def _good(acc, crit=0):
+    return {"accuracy": acc, "critical_violations": crit, "n": 4, "over_escalation_rate": 0, "under_escalation_rate": 0}
+
+
+def _render_with(tmp_path, monkeypatch, ops, rationale, risk="needs_approval", gate=None):
+    import harness_evolve.court_ui.app as m
+    c, _ = _make(tmp_path)
+    rep = {"proposer": "heuristic+tool-heuristic", "status": "candidate", "version": 5, "risk": risk, "rationale": rationale,
+           "ops": ops, "gate": gate or {"gate": "pass", "reasons": []}, "candidate": {"dev": _good(0.88), "heldout": _good(0.9)}}
+    monkeypatch.setattr(m, "run_cycle", lambda store, proposer: rep)
+    return _post(c, "/cycle", proposer="heuristic").text
+
+
+def _card(html):
+    return html.split('id="proposed"')[1].split('id="versions"')[0]
+
+
+def test_card_renders_summary_with_friendly_fields(tmp_path):
+    import re
+    c, _ = _make(tmp_path)
+    card = _card(_post(c, "/cycle", proposer="heuristic").text)
+    assert "Proposed change v2" in card and "Awaiting approval" in card
+    assert "Rule-based proposer" in card and "What would change" in card
+    assert "Show the evidence" in card and "Technical details" in card
+    assert "proposer heuristic" not in card and ", status " not in card
+    assert re.search(r"Score impact:</b> Accuracy on known cases \d+% to \d+%, dangerous misses \d+ to \d+, safety check", card)
+    assert 'class="badge b-active">Passed<' in card or 'class="badge b-rejected">Failed<' in card
+    assert card.split("Show the evidence")[1].split("</details>")[0].count("<li>") >= 1
+
+
+def test_card_badges_loosening_and_escaping(tmp_path, monkeypatch):
+    ops = [{"op": "add_keyword", "level": "high", "keyword": "<script>alert(1)</script>"},
+           {"op": "enable_tool", "intent": "claims", "tool": "get_quote"},
+           {"op": "set_limit", "name": "max_llm_steps_per_turn", "value": 14},
+           {"op": "weird<img src=x>"}, {"op": "zap", "evil": "<script>x</script>"}]
+    html = _render_with(tmp_path, monkeypatch, ops, "first <b>point</b>; second point; third point")
+    card = _card(html)
+    assert "<script>alert(1)</script>" not in html and "&lt;script&gt;alert(1)" in card
+    assert "<img src=x>" not in html and "<script>x</script>" not in html
+    assert card.count("Loosens a safeguard") == 2 and "Needs your approval" in card and "Unknown change" in card
+    ev = card.split("Show the evidence")[1].split("</details>")[0]
+    assert ev.count("<li>") == 3  # one bullet per '; ' piece, not a single text node
+    assert "first &lt;b&gt;point&lt;/b&gt;" in ev and "<b>point</b>" not in card
+
+
+def test_card_low_risk_and_failed_gate_reasons(tmp_path, monkeypatch):
+    gate = {"gate": "fail", "reasons": ["held-out accuracy dropped", "critical miss <i>x</i>"]}
+    html = _render_with(tmp_path, monkeypatch, [{"op": "disable_tool", "intent": "general", "tool": "get_quote"}],
+                        "ok", risk="low", gate=gate)
+    card = _card(html)
+    assert "Low risk" in card and "Loosens a safeguard" not in card
+    assert 'class="badge b-rejected">Failed<' in card and "held-out accuracy dropped" in card
+    assert "critical miss &lt;i&gt;x&lt;/i&gt;" in card
+
+
+def test_card_approve_reject_keep_csrf_and_confirm(tmp_path):
+    import re
+    c, _ = _make(tmp_path)
+    card = _card(_post(c, "/cycle", proposer="heuristic").text)
+    forms = re.findall(r"<form .*?</form>", card, re.S)
+    assert len(forms) == 2 and any("/approve" in f for f in forms) and any("/reject" in f for f in forms)
+    for f in forms:
+        assert f'name="csrf" value="{TOKEN}"' in f and 'name="confirm"' in f
+        assert "I understand this changes live state" in f
+    assert "confirm" in _post(c, "/version/2/approve").text.lower()
+
+
+def test_version_header_never_wraps_css():
+    from harness_evolve.court_ui import app as appmod
+    assert "#trial .tw th:nth-child(2){white-space:nowrap" in appmod.TEMPLATE

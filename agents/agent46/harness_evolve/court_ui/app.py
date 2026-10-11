@@ -99,6 +99,41 @@ UI_LABELS: dict[str, Any] = {
     "tip_dismiss": "Rule that the agent was fine; no test case is saved.",
     "tip_overturn": "Change the expected answer or critical flag of an earlier conviction.",
     "tip_retract": "Withdraw an earlier conviction and remove its test case.",
+    "card_title": "Proposed change v{version}",
+    "risk_needs_approval": "Needs your approval", "risk_low": "Low risk",
+    "loosens": "Loosens a safeguard",
+    "what_changes": "What would change",
+    "no_changes": "No changes proposed.",
+    "group_rules": "Risk rules", "group_tools": "Tool access", "group_limits": "Agent limits", "group_other": "Other",
+    "show_tools": "Show the tools",
+    "show_evidence": "Show the evidence", "no_evidence": "No explanation was given.",
+    "more_evidence": "and {n} more",
+    "tech_details": "Technical details",
+    "impact_title": "Score impact",
+    "impact_line": "Accuracy on known cases {old} to {new}, dangerous misses {c_old} to {c_new}, safety check",
+    "impact_reasons": "Why the safety check failed",
+    "unknown_change": "Unknown change",
+    "op_keyword_high": "Treat \"{keyword}\" as high-severity: send to manual review",
+    "op_keyword_medium": "Treat \"{keyword}\" as medium-severity: recommend review",
+    "op_add_rule": "Add a guidance rule: {text}",
+    "op_remove_rule": "Remove the guidance rule \"{id}\"",
+    "op_threshold_raise": "Raise the {what} from {old} to {new}",
+    "op_threshold_lower": "Lower the {what} from {old} to {new}",
+    "op_threshold_set": "Set the {what} to {new}",
+    "op_tools_off": "Stop offering {n} {tools} for {intent}",
+    "op_tools_on": "Start offering {n} {tools} for {intent}",
+    "op_limit_raise": "Allow up to {new} {what}, up from {old}",
+    "op_limit_lower": "Cap at {new} {what}, down from {old}",
+    "op_limit_set": "Allow up to {new} {what}",
+    "tool_one": "tool", "tool_many": "tools",
+    "thresholds": {"medium_score": "review threshold for policy risk score",
+                   "high_score": "high-risk threshold for policy risk score",
+                   "auto_approve_limit": "auto-approve amount limit",
+                   "medium_amount": "medium-risk claim amount",
+                   "high_amount": "high-risk claim amount"},
+    "intents": {"quote": "quote requests", "claims": "claims", "info": "information questions",
+                "general": "general questions"},
+    "limits": {"max_llm_steps_per_turn": "model steps per turn", "max_tool_calls_per_turn": "tool calls per turn"},
     "critical_badge": "critical",
     "tip_critical_badge": "must never be auto-approved",
 }
@@ -117,6 +152,103 @@ def _author_label(author: str) -> str:
                 parts.append(n)
         return ", ".join(parts)
     return author
+
+
+def _num(v: Any) -> str:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return str(v)
+    return f"{v:.2f}" if isinstance(v, float) and v != int(v) else f"{int(v):,}"
+
+
+def _clip(text: Any, n: int) -> str:
+    t = " ".join(str(text).split())
+    return t if len(t) <= n else t[: n - 1].rstrip() + "..."
+
+
+def _isnum(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def describe_ops(ops: Any, manifest: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Plain-English summary of patch ops as [{group, text, risk[, tools]}]. Never raises.
+
+    risk is "loosens" for ops that widen or relax a safeguard (raised threshold or limit,
+    enable_tool, removed rule) and "ok" otherwise. Thresholds and limits are compared against
+    `manifest` (or the shipped baseline) and tracked across ops in order. `text` is plain text:
+    the template escapes it. Many disable_tool/enable_tool ops collapse into one line per intent.
+    """
+    from agent_agent46.harness_config import DEFAULT_MANIFEST
+    L = UI_LABELS
+    base = manifest if isinstance(manifest, dict) else DEFAULT_MANIFEST
+    thr = dict(base.get("thresholds") or DEFAULT_MANIFEST["thresholds"])
+    lim = dict(base.get("limits") or DEFAULT_MANIFEST["limits"])
+    out: list[dict[str, Any]] = []
+    tool_ops: dict[tuple[str, str], list[str]] = {}
+    tool_pos: dict[tuple[str, str], int] = {}
+    for op in ops if isinstance(ops, list) else []:
+        try:
+            name = op["op"]
+            if name == "add_keyword" and op["level"] in ("high", "medium"):
+                out.append({"group": L["group_rules"], "risk": "ok",
+                            "text": L["op_keyword_" + op["level"]].format(keyword=_clip(op["keyword"], 60))})
+            elif name == "add_rule":
+                out.append({"group": L["group_rules"], "risk": "ok",
+                            "text": L["op_add_rule"].format(text=_clip(op["text"], 140))})
+            elif name == "remove_rule":
+                out.append({"group": L["group_rules"], "risk": "loosens",
+                            "text": L["op_remove_rule"].format(id=_clip(op["id"], 60))})
+            elif name == "set_threshold":
+                key, new = str(op["name"]), op["value"]
+                old = thr.get(key)
+                what = L["thresholds"].get(key) or key.replace("_", " ")
+                if _isnum(old) and _isnum(new) and new != old:
+                    kind = "raise" if new > old else "lower"
+                    text = L["op_threshold_" + kind].format(what=what, old=_num(old), new=_num(new))
+                    risk = "loosens" if new > old else "ok"
+                else:
+                    text, risk = L["op_threshold_set"].format(what=what, new=_num(new)), "ok"
+                thr[key] = new
+                out.append({"group": L["group_rules"], "risk": risk, "text": text})
+            elif name in ("disable_tool", "enable_tool"):
+                k = (name, str(op["intent"]))
+                if k not in tool_ops:
+                    tool_ops[k] = []
+                    tool_pos[k] = len(out)
+                    out.append({})  # placeholder, filled below to keep op order
+                tool_ops[k].append(str(op["tool"]))
+            elif name == "set_limit":
+                key, new = str(op["name"]), op["value"]
+                old = lim.get(key)
+                what = L["limits"].get(key) or key.replace("_", " ")
+                if _isnum(old) and _isnum(new) and new != old:
+                    kind = "raise" if new > old else "lower"
+                    text = L["op_limit_" + kind].format(what=what, old=_num(old), new=_num(new))
+                    risk = "loosens" if new > old else "ok"
+                else:
+                    text, risk = L["op_limit_set"].format(what=what, new=_num(new)), "ok"
+                lim[key] = new
+                out.append({"group": L["group_limits"], "risk": risk, "text": text})
+            else:
+                raise KeyError(name)
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+            out.append({"group": L["group_other"], "risk": "ok",
+                        "text": L["unknown_change"] + ": " + _clip(json.dumps(op, default=str), 100)})
+    for (name, intent), tools in tool_ops.items():
+        n = len(set(tools))
+        out[tool_pos[(name, intent)]] = {
+            "group": L["group_tools"], "risk": "loosens" if name == "enable_tool" else "ok", "tools": sorted(set(tools)),
+            "text": L["op_tools_off" if name == "disable_tool" else "op_tools_on"].format(
+                n=n, tools=L["tool_one"] if n == 1 else L["tool_many"], intent=L["intents"].get(intent, intent))}
+    order = [L["group_rules"], L["group_tools"], L["group_limits"], L["group_other"]]
+    return sorted(out, key=lambda d: order.index(d["group"]))  # stable: keeps op order within a group
+
+
+def _rationale_points(text: Any, limit: int = 8, width: int = 220) -> list[str]:
+    parts = [p.strip() for p in str(text or "").replace("\n", "; ").split("; ") if p.strip()]
+    pts = [_clip(p, width) for p in parts[:limit]]
+    if len(parts) > limit:
+        pts.append(UI_LABELS["more_evidence"].format(n=len(parts) - limit))
+    return pts
 
 
 def _pct(x: Any) -> str:
@@ -178,6 +310,11 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .dlg-b{max-height:calc(100vh - 90px)}
 div.panel>details>summary{font-weight:700;font-size:15px;color:#222;padding-right:34px}
 div.panel>details[open]>summary{margin-bottom:8px}
+#trial .tw th:nth-child(2){white-space:nowrap;min-width:84px}.tw{-webkit-overflow-scrolling:touch}
+.pcard{border:1px solid #c9d6e3;background:#fbfcfe;border-radius:6px;padding:10px 12px;margin-top:10px}
+.pch{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}.pch h3{margin:0 6px 0 0;font-size:15px}.pcard h4{margin:10px 0 2px;font-size:13px}
+.pcard ul{margin:2px 0 6px;padding-left:20px}.cg{margin:4px 0}.b-warn{background:#ffe3a3;color:#6b4300;border:1px solid #e0a800}
+.pcard details{margin:4px 0}.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid #e4e4dc}.impact{margin:8px 0}
 @media (max-width:800px){header{padding:8px 12px}main{padding:10px 12px}.bar input[type=text]{flex:1 1 120px}}
 </style></head><body>
 {% macro tip(id, label, text) %}<button type="button" class="si" aria-label="{{ label }}" aria-describedby="{{ id }}" title="{{ text }}">i</button><span class="tipbody" id="{{ id }}" role="tooltip">{{ text }}</span>{% endmacro %}
@@ -340,16 +477,25 @@ whether a proposed harness change is safe, and a human approves it before it goe
 <details><summary>{{ L.dry_prompt }}</summary><pre>{{ dry.prompt }}</pre></details>
 <form method="post" action="/cycle">{{ tok() }}<input type="hidden" name="proposer" value="llm">
 <button name="action" value="llm_call">{{ L.ask_llm }}</button></form>{% endif %}
-{% if report %}<h3>{{ L.proposed_title }}</h3>
-<p>proposer {{ report.proposer }}, status <b>{{ report.status }}</b>{% if report.version %}, version v{{ report.version }}{% endif %}, risk {{ report.risk }}</p>
-<p>{{ report.rationale }}</p>
-<p>Ops:</p><pre>{{ report.ops_json }}</pre>
-{% if report.gate %}<p>{{ L.col_gate }}: <b>{{ L.gate_pass if report.gate.gate == "pass" else L.gate_fail }}</b></p>
-<ul>{% for r in report.gate.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+{% if report %}<div class="pcard" id="proposed">
+<div class="pch"><h3>{{ L.card_title.format(version=report.version) if report.version else L.proposed_title }}</h3>
+<span class="badge b-active">{{ report.author_label }}</span>
+<span class="badge b-{{ report.status }}">{{ L.status.get(report.status, report.status) }}</span>
+<span class="badge {{ 'b-active' if report.risk == 'low' else 'b-candidate' }}">{{ L.risk_low if report.risk == 'low' else L.risk_needs_approval }}</span></div>
+<h4>{{ L.what_changes }}</h4>
+{% if report.changes %}{% for grp, items in report.changes|groupby("group") %}<div class="cg"><b>{{ grp }}</b><ul>
+{% for it in items %}<li>{{ it.text }}{% if it.risk == "loosens" %} <span class="badge b-warn">{{ L.loosens }}</span>{% endif %}
+{% if it.tools %}<details><summary>{{ L.show_tools }}</summary>{{ it.tools|join(", ") }}</details>{% endif %}</li>{% endfor %}</ul></div>{% endfor %}
+{% else %}<p class="muted">{{ L.no_changes }}</p>{% endif %}
+{% if report.impact %}<p class="impact"><b>{{ L.impact_title }}:</b> {{ L.impact_line.format(old=report.impact.old, new=report.impact.new, c_old=report.impact.c_old, c_new=report.impact.c_new) }}
+<span class="badge {{ 'b-active' if report.impact.passed else 'b-rejected' }}">{{ L.gate_pass if report.impact.passed else L.gate_fail }}</span></p>{% endif %}
+{% if report.gate and report.gate.gate != "pass" and report.gate.reasons %}<p><b>{{ L.impact_reasons }}</b></p><ul>{% for r in report.gate.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+<details><summary>{{ L.show_evidence }}</summary>{% if report.points %}<ul>{% for p in report.points %}<li>{{ p }}</li>{% endfor %}</ul>{% else %}<p class="muted">{{ L.no_evidence }}</p>{% endif %}</details>
+<details><summary>{{ L.tech_details }}</summary><pre>{{ report.ops_json }}</pre></details>
 {% if report.error %}<p class="err flash">{{ report.error }}</p>{% endif %}
-{% if report.status == "candidate" %}
+{% if report.status == "candidate" %}<div class="acts">
 <form method="post" action="/version/{{ report.version }}/approve" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.approve }}</button></form>
-<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.reject }}</button></form>{% endif %}{% endif %}
+<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.reject }}</button></form></div>{% endif %}</div>{% endif %}
 </details></div>
 
 <div class="panel pos" id="versions">{{ tip("tip-ver", "About " ~ L.versions, "Every policy version: " ~ L.status.active ~ " is running now, " ~ L.status.retired ~ " can be made live again, " ~ L.status.candidate ~ " needs a human decision, " ~ L.status.rejected ~ " was declined.") }}<details><summary>{{ L.versions }} ({{ versions|length }})</summary>
@@ -411,6 +557,9 @@ document.addEventListener("keydown",function(e){if(e.key==="Escape")$$(".si.on")
 def _fmt_report(rep: dict) -> dict:
     out = {k: rep.get(k) for k in ("proposer", "status", "version", "risk", "rationale", "gate", "error", "candidate")}
     out["ops_json"] = json.dumps(rep.get("ops", []), indent=1)
+    out["ops"] = rep.get("ops") or []
+    out["author_label"] = _author_label("proposer:" + str(rep.get("proposer") or ""))
+    out["points"] = _rationale_points(rep.get("rationale"))
     return out
 
 
@@ -466,6 +615,7 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
         cases = court.list_cases()
         active = store.get_active()
         trial = []
+        report_extra: dict[str, Any] = {}
         if active:
             from agent_agent46.harness_config import DEFAULT_MANIFEST
             trial = [(UI_LABELS["row_baseline"], "-", evaluate(DEFAULT_MANIFEST, "dev"), evaluate(DEFAULT_MANIFEST, "heldout"), "-"),
@@ -475,7 +625,13 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
             if rep_ and rep_.get("version") and (rep_.get("candidate") or {}).get("dev"):
                 cand = rep_["candidate"]
                 gate = (rep_.get("gate") or {}).get("gate", "-")
+                report_extra = {"impact": {"old": _pct(trial[1][2]["accuracy"]), "new": _pct(cand["dev"]["accuracy"]),
+                                           "c_old": trial[1][2]["critical_violations"], "c_new": cand["dev"]["critical_violations"],
+                                           "passed": gate == "pass"}} if gate in ("pass", "fail") else {}
                 trial.append((UI_LABELS["row_candidate"] if rep_["status"] == "candidate" else f"Proposed change ({rep_['status']})", f"v{rep_['version']}", cand["dev"], cand["heldout"], gate))
+        report = None
+        if state["report"]:
+            report = {**state["report"], **report_extra, "changes": describe_ops(state["report"].get("ops"), active["manifest"] if active else None)}
         flashes, state["flashes"] = state["flashes"], []
         closed = [_decided_view(c) for c in cases if c["status"] in ("convicted", "dismissed")]
         closed.sort(key=lambda c: c["when_full"], reverse=True)
@@ -484,7 +640,7 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
             nominated=[c for c in cases if c["status"] == "nominated"],
             filed=[c for c in cases if c["status"] == "filed"],
             closed=closed, L=UI_LABELS, app_name=APP_NAME, app_subtitle=APP_SUBTITLE, page_size=DECIDED_PAGE_SIZE,
-            recs=sorted(VALID_RECOMMENDATIONS), audit=audit.recent(db, 10), report=state["report"], dry=state["dry"], tok=tok)
+            recs=sorted(VALID_RECOMMENDATIONS), audit=audit.recent(db, 10), report=report, dry=state["dry"], tok=tok)
 
     @app.post("/scan")
     async def scan(request: Request):

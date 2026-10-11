@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from pymongo import MongoClient
 
+from agent_agent46 import observability
 from agent_agent46.tool_access import baseline_tool_access, validate_tool_access
 
 logger = logging.getLogger(__name__)
@@ -238,14 +239,18 @@ def load_active_manifest(store: Optional[HarnessConfigStore]) -> tuple[int, dict
     if _cache["value"] is not None and now - _cache["at"] < CACHE_TTL_SECONDS:
         return _cache["value"]
     value: tuple[int, dict[str, Any]] = (BUILTIN_VERSION, copy.deepcopy(DEFAULT_MANIFEST))
-    if store is not None:
+    if store is None:
+        observability.manifest_fallback("store_unavailable")
+    else:
         try:
             doc = store.get_active()
             if doc and not validate_manifest(doc["manifest"]):
                 value = (doc["version"], doc["manifest"])
             elif doc:
                 logger.error(f"Active manifest v{doc['version']} fails invariants; using baseline")
+                observability.manifest_fallback("invalid_manifest")
         except Exception as e:
             logger.warning(f"Could not load active manifest, using baseline: {e}")
+            observability.manifest_fallback("load_error")
     _cache.update(at=now, value=value)
     return value

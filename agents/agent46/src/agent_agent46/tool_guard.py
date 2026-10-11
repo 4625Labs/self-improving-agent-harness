@@ -21,6 +21,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
+from agent_agent46 import observability
 from agent_agent46.tool_access import ALL_TOOLS, resolve_tool_access
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def resolve_allowed(
         return resolve_tool_access(manifest, text, called)
     except Exception:
         logger.error("Tool access resolution failed; failing open to all tools", exc_info=True)
+        observability.access_failed_open()
         return "general", ALL_TOOLS
 
 
@@ -126,6 +128,7 @@ def guarded_tool_node(
         for c in calls:
             if c["id"] in denied_ids:
                 logger.warning(f"Denied call to tool not allowed for this request: {c.get('name')}")
+                observability.tool_denied(c.get('name'))
 
         kept = [c for c in calls if c["id"] not in denied_ids]
         by_id: dict[str, Any] = {}

@@ -42,6 +42,7 @@ from agent_agent46.harness_config import (
 from agent_agent46.llm import build_llm
 from agent_agent46.memory_policy import user_scoped_label
 from agent_agent46.risk import assess_claim_risk
+from agent_agent46 import observability
 from agent_agent46.tool_guard import filter_tool_schemas, guarded_tool_node, resolve_allowed
 from agent_agent46.policy_store import (
     Claim,
@@ -402,6 +403,13 @@ def analyze_claim_risk(claim_id: str) -> str:
             "status": "under_review",
         },
     )
+    observability.risk_assessed(
+        claim_id=claim_id,
+        risk=result["risk_assessment"],
+        recommendation=result["recommendation"],
+        harness_version=harness_version,
+        user_id=user_id,
+    )
 
     return json.dumps(result, indent=2)
 
@@ -442,6 +450,7 @@ def human_review(
     user_id = _current_user_id()
     claim_store.update_claim(claim_id, user_id, {"status": "suspended_for_review"})
 
+    observability.review_suspended(claim_id=claim_id, risk_level=risk_level, user_id=user_id)
     answer = interrupt(
         {
             "action": "review_claim",
@@ -466,6 +475,8 @@ def human_review(
     reviewer_notes = answer.get("reviewer_notes", "")
     if not isinstance(reviewer_notes, str):
         raise TypeError("human review reviewer_notes must be a string")
+
+    observability.review_resumed(claim_id=claim_id, decision=review_decision, user_id=user_id)
 
     # Review complete: restore the resolvable analysis state so resolve_claim
     # accepts the reviewer's decision next.
@@ -1232,7 +1243,29 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
 
     def should_continue(state: AgentState) -> Literal["tools", "end"]:
         last = state["messages"][-1]
-        return "tools" if hasattr(last, "tool_calls") and last.tool_calls else "end"  # type: ignore[union-attr]  # LangChain BaseMessage subclass has tool_calls
+        if hasattr(last, "tool_calls") and last.tool_calls:  # type: ignore[union-attr]  # LangChain BaseMessage subclass has tool_calls
+            return "tools"
+        _track_turn(state)
+        return "end"
+
+    def _track_turn(state: AgentState) -> None:
+        """Report the finished turn to Raindrop. Never affects the graph."""
+        try:
+            from langchain_core.messages import HumanMessage
+
+            msgs = state["messages"]
+            question = next((m.content for m in reversed(msgs) if isinstance(m, HumanMessage)), "")
+            version, current_manifest = load_active_manifest(config_store)
+            observability.track_turn(
+                user_id=state.get("user_id"),
+                session_id=state.get("session_id"),
+                input_text=question if isinstance(question, str) else str(question),
+                output_text=str(msgs[-1].content),
+                harness_version=version,
+                intent=resolve_allowed(current_manifest, msgs)[0],
+            )
+        except Exception:
+            logger.debug("Raindrop turn tracking failed", exc_info=True)
 
     def tools_allowed(history: list[BaseMessage]) -> frozenset[str]:
         # Same resolution as agent_node, on the history the model saw when it chose the calls.

@@ -42,3 +42,5 @@ network:
     egress:
         - fqdn: api.openai.com
           ports: [443]
+        - fqdn: api.raindrop.ai
+          ports: [443]

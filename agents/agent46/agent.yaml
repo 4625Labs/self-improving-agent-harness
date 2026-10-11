@@ -12,6 +12,9 @@ framework: langgraph
 features:
     durable_workflow: true
     memory: true
+    # Platform guardrails (admin > Guardrails). Evaluated by the Orchestration Engine, text patterns only.
+    # Behaviour limits (tool-call caps, step cap) stay in src/agent_agent46/tool_limits.py.
+    guardrails: true
 # Tool placement and pass-through secrets. Interrupt tools must stay on the agent.
 sandboxes:
     agent:

@@ -75,7 +75,9 @@ def _make(tmp_path, desc="dent", llm_calls=None):
     reset_call_count()
     factory = lambda: LLMProposer(client=client, cache_dir=tmp_path / "cache", max_calls=3)  # noqa: E731
     app = create_app(db, FakeStore(), token=TOKEN, llm_factory=factory, docket_path=tmp_path / "docket.json")
-    return TestClient(app, follow_redirects=True), calls
+    tc = TestClient(app, follow_redirects=True)
+    tc.db, tc.docket = db, tmp_path / "docket.json"
+    return tc, calls
 
 
 def _post(c, url, **data):
@@ -182,3 +184,97 @@ def test_trial_shows_candidate_row_after_cycle(tmp_path):
     html = _post(c, "/cycle", proposer="heuristic").text
     assert "candidate (" in html and "held-out accuracy" in html
     assert "viewport" in html and "convicted:" not in html
+
+
+def _seed_decided(c, n=25, desc="dent"):
+    """Insert n extra claims and decide them (alternating convict/dismiss) through the real routes."""
+    db = c.db
+    for i in range(n):
+        db["insurance_claims"].insert_one({
+            "claim_id": f"SEED{i:02d}", "policy_number": "POL1", "user_id": "u", "claim_type": "auto",
+            "claim_amount": 100.0, "description": desc, "recommendation": "review_recommended",
+            "risk_assessment": "low", "harness_version": 1, "resolution": "approved"})
+        _post(c, "/nominate", claim_id=f"SEED{i:02d}", reason="seed")
+    for k, case in enumerate(_cases(c)):
+        cid = case["case_id"]
+        _post(c, f"/case/{cid}/file")
+        if k % 2:
+            _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="Dana", confirm="1")
+        else:
+            _post(c, f"/case/{cid}/verdict", action="verdict", expected="auto_approve", adjuster="Ann", confirm="1")
+
+
+def _cases(c):
+    from harness_evolve.court import CourtDocket
+    return CourtDocket(c.db, c.docket).list_cases()
+
+
+def _visible_rows(html):
+    return [r for r in html.split('<tr class="drow"')[1:] if " hidden" not in r.split(">", 1)[0]]
+
+
+def test_title_subtitle_and_constants(tmp_path):
+    from harness_evolve.court_ui import app as appmod
+    c, _ = _make(tmp_path)
+    html = c.get("/").text
+    assert f"<title>{appmod.APP_NAME}</title>" in html and appmod.APP_NAME == "Regression Court"
+    assert f"<h1>{appmod.APP_NAME}</h1>" in html
+    assert "Review agent failures, rule on them, ship safer policy" in html and "Court docket" not in html
+
+
+def test_info_dialog_content_and_labels(tmp_path):
+    c, _ = _make(tmp_path)
+    html = c.get("/").text
+    assert "<dialog" in html and 'aria-label="About Regression Court' in html and "alert(" not in html
+    for s in ("Nominate", "Prove live", "Read the diff", "Verdict dropdown", "Critical", "adjuster", "Convict", "Dismiss",
+              "Overturn", "Retract", "confirm box", "History", "dev accuracy", "held-out accuracy", "dev n",
+              "critical violations", "over-esc.", "under-esc.", "gate", "Rollback to", "candidate", "rejected",
+              "expected-auto claims sent to a human anyway", "needed escalation but got a lighter outcome",
+              "auto-approved"):
+        assert s in html, s
+    for s in ("Nominated", "Filed", "Convicted and Dismissed", "Trial", "Versions", "Audit"):
+        assert f'aria-label="About {s}"' in html, s
+
+
+def test_tabs_counts_and_collapsible_panels(tmp_path):
+    c, _ = _make(tmp_path)
+    html = c.get("/").text
+    assert 'data-default="nominated"' in html and 'role="tablist"' in html
+    assert 'id="trial">' in html and "<details open><summary>Trial" in html
+    assert '<details><summary>Versions' in html and '<details><summary>Audit log' in html
+    assert "Scan" in html and 'class="ver"' in html
+    _post(c, "/scan")
+    _post(c, f"/case/{_case_id(c)}/file")
+    html = c.get("/").text
+    assert 'data-default="filed"' in html and 'aria-selected="false">Filed<span class="cnt">1<' in html
+
+
+def test_decided_tab_paginates_and_has_working_forms(tmp_path):
+    c, _ = _make(tmp_path)
+    _seed_decided(c)
+    html = c.get("/").text
+    assert html.count('class="drow"') == 25 and len(_visible_rows(html)) == 10
+    assert 'id="show-more"' in html and 'id="decided-search"' in html
+    for chip in ("all", "convicted", "dismissed"):
+        assert f'data-chip="{chip}"' in html
+    assert 'class="badge b-convicted"' in html and 'class="badge b-dismissed"' in html
+    # expanded content (hidden by default) still carries Overturn/Retract forms with the CSRF token
+    assert f'name="csrf" value="{TOKEN}"' in html
+    assert html.count("/overturn") == 13 and html.count("/retract") == 13
+    row = html.split('<tr class="dd"')[1].split("</tr>")[0]
+    assert "hidden" in html.split('<tr class="dd"')[1][:80] and "Overturn" in row and f'value="{TOKEN}"' in row
+    cid = html.split("/overturn")[0].rsplit("/case/", 1)[1]
+    assert "verdict overturned" in _post(c, f"/case/{cid}/overturn", expected="manual_review_required", adjuster="Bob",
+                                         reason="new evidence", confirm="1").text
+    assert "verdict retracted" in _post(c, f"/case/{cid}/retract", adjuster="Bob", reason="oops", confirm="1").text
+
+
+def test_script_in_claim_text_escaped_in_decided_tab(tmp_path):
+    c, _ = _make(tmp_path, desc="<script>alert(1)</script>")
+    _post(c, "/scan")
+    cid = _case_id(c)
+    _post(c, f"/case/{cid}/file")
+    _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="<script>alert(2)</script>", confirm="1")
+    html = c.get("/").text
+    assert "<script>alert(" not in html
+    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in html

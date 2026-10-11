@@ -1,0 +1,22 @@
+# Repo-level ignores. Workspace-level ignores live in agents/agent46/.gitignore.
+.DS_Store
+**/.DS_Store
+
+# Secrets and local environment (never commit)
+.env
+.env.*
+!env.example
+!.env.example
+
+# Python / tooling caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+
+# Runtime output that can contain conversation content
+logs/
+*.log

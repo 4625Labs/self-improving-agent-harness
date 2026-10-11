@@ -1,0 +1,520 @@
+[
+ {
+  "id": "d01",
+  "claim": {
+   "claim_amount": 300,
+   "claim_type": "auto",
+   "description": "Small chip in windshield from gravel on highway"
+  },
+  "policy": {
+   "risk_score": 0.1,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d02",
+  "claim": {
+   "claim_amount": 450,
+   "claim_type": "auto",
+   "description": "Minor bumper scuff in parking lot"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d03",
+  "claim": {
+   "claim_amount": 250,
+   "claim_type": "auto",
+   "description": "Broken side mirror, replaced at dealer"
+  },
+  "policy": {
+   "risk_score": 0.1,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 1,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d04",
+  "claim": {
+   "claim_amount": 180,
+   "claim_type": "auto",
+   "description": "Flat tire repaired after nail puncture"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d05",
+  "claim": {
+   "claim_amount": 900,
+   "claim_type": "auto",
+   "description": "Minor fender scratch"
+  },
+  "policy": {
+   "risk_score": 0.7,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 3,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "risky_policy",
+   "small_amount",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d06",
+  "claim": {
+   "claim_amount": 900,
+   "claim_type": "auto",
+   "description": "Minor fender scratch in a car park"
+  },
+  "policy": {
+   "risk_score": 0.5,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 4,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "repeat_claimant",
+   "small_amount",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d07",
+  "claim": {
+   "claim_amount": 800,
+   "claim_type": "auto",
+   "description": "Vehicle was set on arson suspicion, burned overnight"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d08",
+  "claim": {
+   "claim_amount": 2500,
+   "claim_type": "auto",
+   "description": "Vehicle submerged in lake after owner left it by the shore"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d09",
+  "claim": {
+   "claim_amount": 700,
+   "claim_type": "auto",
+   "description": "Hit and run while parked, no witnesses, rear panel damaged"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d10",
+  "claim": {
+   "claim_amount": 12000,
+   "claim_type": "auto",
+   "description": "Vehicle stolen from driveway overnight"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "theft",
+   "large"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d11",
+  "claim": {
+   "claim_amount": 20000,
+   "claim_type": "auto",
+   "description": "Engine fire spread to cabin"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fire",
+   "large"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d12",
+  "claim": {
+   "claim_amount": 30000,
+   "claim_type": "auto",
+   "description": "Total loss after collision"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 25000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "over_limit",
+   "large"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d13",
+  "claim": {
+   "claim_amount": 9000,
+   "claim_type": "auto",
+   "description": "Rear-ended at traffic light"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 8000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "over_limit"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d14",
+  "claim": {
+   "claim_amount": 7000,
+   "claim_type": "auto",
+   "description": "Collision damage to front end"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "medium"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d15",
+  "claim": {
+   "claim_amount": 3000,
+   "claim_type": "auto",
+   "description": "Hail damage to roof and hood"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "medium"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d16",
+  "claim": {
+   "claim_amount": 400,
+   "claim_type": "auto",
+   "description": "Door ding from shopping cart"
+  },
+  "policy": {
+   "risk_score": 0.45,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d17",
+  "claim": {
+   "claim_amount": 350,
+   "claim_type": "auto",
+   "description": "Cracked taillight lens"
+  },
+  "policy": {
+   "risk_score": 0.5,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 1,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d18",
+  "claim": {
+   "claim_amount": 600,
+   "claim_type": "auto",
+   "description": "Minor door ding, no flood or fire involved, other driver accepted fault"
+  },
+  "policy": {
+   "risk_score": 0.1,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "keyword_false_positive",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d19",
+  "claim": {
+   "claim_amount": 500,
+   "claim_type": "auto",
+   "description": "Scratched paint, fire station parking lot"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "keyword_false_positive",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d20",
+  "claim": {
+   "claim_amount": 16000,
+   "claim_type": "auto",
+   "description": "Major collision, structural damage to frame"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 1,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "large"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d21",
+  "claim": {
+   "claim_amount": 6000,
+   "claim_type": "auto",
+   "description": "Significant damage to rear quarter panel"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "medium"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d22",
+  "claim": {
+   "claim_amount": 950,
+   "claim_type": "auto",
+   "description": "Windshield crack"
+  },
+  "policy": {
+   "risk_score": 0.8,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 5,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "risky_policy",
+   "repeat_claimant"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d23",
+  "claim": {
+   "claim_amount": 1500,
+   "claim_type": "auto",
+   "description": "Storm flooded the garage, car water damaged"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "flood"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "d24",
+  "claim": {
+   "claim_amount": 5500,
+   "claim_type": "auto",
+   "description": "Vandalism, keyed paint on both sides, owner away for weeks"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 2,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "medium",
+   "fraud_phrase"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "d25",
+  "claim": {
+   "claim_amount": 200,
+   "claim_type": "auto",
+   "description": "Wiper blades torn by ice"
+  },
+  "policy": {
+   "risk_score": 0.15,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ }
+]

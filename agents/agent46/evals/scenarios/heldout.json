@@ -1,0 +1,212 @@
+[
+ {
+  "id": "h01",
+  "claim": {
+   "claim_amount": 850,
+   "claim_type": "auto",
+   "description": "Minor scratch on rear bumper"
+  },
+  "policy": {
+   "risk_score": 0.65,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 2,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "risky_policy",
+   "small_amount",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h02",
+  "claim": {
+   "claim_amount": 1200,
+   "claim_type": "auto",
+   "description": "Car deliberately burned, possible arson"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "h03",
+  "claim": {
+   "claim_amount": 3000,
+   "claim_type": "auto",
+   "description": "Car found submerged in a river, owner unsure how"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "h04",
+  "claim": {
+   "claim_amount": 600,
+   "claim_type": "auto",
+   "description": "Hit-and-run in a supermarket car park, dented door"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "fraud_phrase",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h05",
+  "claim": {
+   "claim_amount": 300,
+   "claim_type": "auto",
+   "description": "Small dent from hail"
+  },
+  "policy": {
+   "risk_score": 0.42,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h06",
+  "claim": {
+   "claim_amount": 250,
+   "claim_type": "auto",
+   "description": "Chipped paint, no theft or fire, minor"
+  },
+  "policy": {
+   "risk_score": 0.1,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "over_escalation",
+   "keyword_false_positive",
+   "baseline_wrong"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h07",
+  "claim": {
+   "claim_amount": 15000,
+   "claim_type": "auto",
+   "description": "Theft of vehicle from parking garage"
+  },
+  "policy": {
+   "risk_score": 0.2,
+   "coverage_limit": 10000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "theft",
+   "over_limit"
+  ],
+  "severity": "critical"
+ },
+ {
+  "id": "h08",
+  "claim": {
+   "claim_amount": 5200,
+   "claim_type": "auto",
+   "description": "Major repair needed after side collision"
+  },
+  "policy": {
+   "risk_score": 0.3,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "review_recommended"
+  },
+  "tags": [
+   "medium"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h09",
+  "claim": {
+   "claim_amount": 400,
+   "claim_type": "auto",
+   "description": "Cracked mirror housing"
+  },
+  "policy": {
+   "risk_score": 0.1,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 0,
+  "expected": {
+   "recommendation": "auto_approve"
+  },
+  "tags": [
+   "clean"
+  ],
+  "severity": "normal"
+ },
+ {
+  "id": "h10",
+  "claim": {
+   "claim_amount": 20000,
+   "claim_type": "auto",
+   "description": "Fire in engine bay, vehicle totaled"
+  },
+  "policy": {
+   "risk_score": 0.5,
+   "coverage_limit": 50000
+  },
+  "previous_claims_count": 2,
+  "expected": {
+   "recommendation": "manual_review_required"
+  },
+  "tags": [
+   "fire",
+   "large"
+  ],
+  "severity": "critical"
+ }
+]

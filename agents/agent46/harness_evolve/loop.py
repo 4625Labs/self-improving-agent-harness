@@ -12,7 +12,10 @@ from .proposer import RISK_OPS, SURFACES, TOOL_OPS
 
 
 def _summary(res: dict) -> dict:
-    return {k: v for k, v in res.items() if k != "failures"} | {"failed_ids": [f["id"] for f in res["failures"]]}
+    out = {k: v for k, v in res.items() if k != "failures"}
+    if res.get("split") == "heldout":
+        return out  # held-out ids must never leave the evaluator: counts and metrics only
+    return out | {"failed_ids": [f["id"] for f in res["failures"]]}
 
 
 def record_scores(store: HarnessConfigStore, version: int, scores: dict[str, Any]) -> None:

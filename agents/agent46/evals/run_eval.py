@@ -8,6 +8,7 @@ CLI: uv run python -m evals.run_eval --manifest <path.json|baseline> --split dev
 import argparse
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,70 @@ AUTO, REVIEW, MANUAL = "auto_approve", "review_recommended", "manual_review_requ
 RANK = {AUTO: 0, REVIEW: 1, MANUAL: 2}
 
 
+DOCKET_PATH = SCENARIO_DIR / "docket.json"  # court-convicted risk scenarios; dev-side only
+SCENARIO_KEYS = {"id", "claim", "policy", "previous_claims_count", "expected", "tags", "severity"}
+RECOMMENDATIONS = {AUTO, REVIEW, MANUAL}
+
+
+def _docket_path() -> Path:
+    env = os.environ.get("EVOLVE_DOCKET_PATH")
+    return Path(env) if env else DOCKET_PATH
+
+
+def _validate_docket_entry(sc: Any) -> None:
+    if not isinstance(sc, dict) or set(sc) != SCENARIO_KEYS:
+        raise ValueError(f"docket entry malformed (keys must be {sorted(SCENARIO_KEYS)}): {sc!r}")
+    sid = sc["id"]
+    if not isinstance(sid, str) or not sid:
+        raise ValueError(f"docket entry has invalid id: {sid!r}")
+    if not isinstance(sc["claim"], dict) or not isinstance(sc["claim"].get("description"), str):
+        raise ValueError(f"docket entry {sid}: claim must be a dict with a string description")
+    if not isinstance(sc["policy"], dict):
+        raise ValueError(f"docket entry {sid}: policy must be a dict")
+    n = sc["previous_claims_count"]
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError(f"docket entry {sid}: previous_claims_count must be a non-negative int")
+    exp = sc["expected"]
+    if not isinstance(exp, dict) or exp.get("recommendation") not in RECOMMENDATIONS:
+        raise ValueError(f"docket entry {sid}: invalid expected.recommendation")
+    if sc["severity"] not in ("normal", "critical"):
+        raise ValueError(f"docket entry {sid}: severity must be normal or critical")
+    if not isinstance(sc["tags"], list) or not all(isinstance(t, str) for t in sc["tags"]):
+        raise ValueError(f"docket entry {sid}: tags must be a list of strings")
+
+
+def load_docket() -> list[dict]:
+    path = _docket_path()
+    if not path.exists():
+        return []
+    entries = json.loads(path.read_text())
+    if not isinstance(entries, list):
+        raise ValueError("docket must be a JSON list")
+    for sc in entries:
+        _validate_docket_entry(sc)
+    return entries
+
+
 def load_scenarios(split: str) -> list[dict]:
     if split not in SPLITS:
         raise ValueError(f"unknown split {split!r}; expected one of {SPLITS}")
-    return json.loads((SCENARIO_DIR / f"{split}.json").read_text())
+    scenarios = json.loads((SCENARIO_DIR / f"{split}.json").read_text())
+    if split != "dev":
+        return scenarios  # heldout never includes docket entries
+    docket = load_docket()
+    if docket:
+        heldout = json.loads((SCENARIO_DIR / "heldout.json").read_text())
+        held_desc = {h["claim"].get("description") for h in heldout}
+        seen = {s["id"] for s in scenarios} | {h["id"] for h in heldout}
+        for sc in docket:
+            if sc["id"] in seen:
+                raise ValueError(f"docket id {sc['id']!r} duplicates an existing scenario id")
+            seen.add(sc["id"])
+            if sc["claim"]["description"] in held_desc:
+                raise ValueError(f"docket scenario {sc['id']!r} claim description matches a held-out "
+                                 "scenario (dev/heldout leakage)")
+        scenarios = scenarios + docket
+    return scenarios
 
 
 def load_manifest(spec: Any) -> dict:

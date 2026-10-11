@@ -1,4 +1,5 @@
 import copy
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -123,6 +124,23 @@ def test_low_risk_auto_activate_and_rollback(store):
     assert r["gate"]["passed"] and r["risk"] == "low" and r["status"] == "active"
     rollback(store, 1)
     assert store.get_active()["version"] == 1
+
+
+def test_heldout_failed_ids_never_stored_or_reported(store):
+    from evals.run_eval import evaluate
+
+    held = evaluate("baseline", "heldout")
+    held_ids = {f["id"] for f in held["failures"]}
+    assert held_ids, "baseline must fail some held-out scenarios for this test to bite"
+    r = run_cycle(store, FixedProposer([{"op": "add_keyword", "level": "high", "keyword": "arson"}]))
+    stored = store.get(r["version"])["scores"]
+    blob = json.dumps(stored, default=str) + json.dumps(r, default=str)
+    for hid in held_ids:
+        assert f'"{hid}"' not in blob
+    assert "failed_ids" not in stored["candidate"]["heldout"]
+    assert "failed_ids" not in r["baseline"]["heldout"]
+    assert r["baseline"]["heldout"]["n"] == held["n"]
+    assert "failed_ids" in r["baseline"]["dev"]
 
 
 def test_needs_approval_not_auto_activated(store):

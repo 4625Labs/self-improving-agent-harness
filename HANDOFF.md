@@ -5,7 +5,11 @@ architecture for a different problem. It starts with the philosophy because the 
 what transfers. The insurance agent here is only the worked example.
 
 Everything marked **verified** was run on a local Docker stack. Anything else is labeled as
-designed, untested, or unknown.
+designed, untested, or unknown. Section 6 starts with a five-minute way to check the headline
+numbers yourself.
+
+Repository: `4625Labs/self-improving-agent-harness` (private). This document describes the state at
+the commit that added tool access (`38aa8da`), with the documentation revised afterwards.
 
 ---
 
@@ -42,8 +46,9 @@ limits.**
 Each principle says what it means, why it exists, where it lives in this repo, and the failure
 that tells you it was broken.
 
-1. **Evolve policy, never control flow.** The proposer changes thresholds, rules and keywords.
-   It never changes the claim state machine, the human-review interrupt, tool sandboxes or egress.
+1. **Evolve policy, never control flow.** The proposer changes thresholds, rules, keywords and tool
+   allow-lists. It never changes the claim state machine, the human-review interrupt, which tools
+   exist in the sandboxes, or egress.
    *Why:* policy can be validated by numbers; control flow needs a human reading code.
    *Broken when:* a proposal needs a code change to take effect.
 
@@ -57,7 +62,8 @@ that tells you it was broken.
    score a decision without calling the whole agent. (Section 7 shows where this gets hard.)
 
 4. **Give the proposer a closed language.** It emits whitelisted operations (`add_rule`,
-   `remove_rule`, `set_threshold`, `add_keyword`), never code or free-form edits.
+   `remove_rule`, `set_threshold`, `add_keyword`, `disable_tool`, `enable_tool`), never code or
+   free-form edits.
    (`harness_evolve/patch.py`.) The result must still pass the invariants.
 
 5. **Humans own the limits, and they are checked in more than one place.** Invariants run when a
@@ -67,7 +73,8 @@ that tells you it was broken.
 6. **Gate on several things at once.** A candidate must not add a critical violation, lose
    accuracy, or raise over-escalation or under-escalation on any split. Our first gate checked
    only accuracy and would have passed a candidate that sent more claims to reviewers.
-   (`evals/run_eval.compare`.)
+   (`evals/run_eval.compare` for risk, `evals/tool_eval.compare_tools` for tool access. A cycle must
+   pass the gate of every surface its patch touches.)
 
 7. **Held-out data is for the gate, never the proposer.** The proposer reads dev failures only.
    Known leak: held-out failure ids are stored in the scores document, so anyone with database
@@ -85,9 +92,11 @@ that tells you it was broken.
     keyword count, length and characters, and the manifest rejects any field it does not know.
 
 11. **Test the guards, not only the features.** Our first static check for memory labels passed
-    even after I replaced the label with an unscoped string, because it checked that the helper was
+    even after the label was replaced with an unscoped string, because it checked that the helper was
     called somewhere, not that its result was used. A negative control caught it. Break the thing on
-    purpose and confirm the test fails.
+    purpose and confirm the test fails. The scenario honesty check did the same job for the intent
+    classifier: tightening keyword matching stopped "vandalized" from counting as a claim, and the
+    check caught it before anything shipped.
 
 12. **Never evolve user data.** The harness may change policy around memory (what to save, which
     sources to read). It must not rewrite what a user's memory contains. Memory labels are
@@ -120,13 +129,16 @@ Do not write code until these are answered in a paragraph each.
 |---|---|---|
 | Which decision do you want to improve? | route a claim to auto-approval or human review | |
 | What does a wrong decision cost, and in which direction? | auto-approving fraud is worse than a needless review | |
-| Which 1 to 3 things may evolve first? | rules, risk thresholds, risk keywords | |
+| Which 1 to 3 things may evolve first? | rules, risk thresholds, risk keywords (tool access came second) | |
 | What must never change? | claim state machine, human review, egress | |
 | Who knows the right answer, and where is it written down? | an adjuster's labeled cases | |
 | Which outcomes must never happen (critical cases)? | auto-approving arson, theft, over-limit claims | |
 | What are the metrics and the gate? | accuracy, both escalation rates, zero critical | |
 | Which changes need a human? | any threshold change, any removal | |
 | What is user data, and how is it kept separate? | customer facts in memory, label-scoped per user | |
+
+Start with one surface. The second surface here, tool access, took as much work as the first
+because it needed its own evaluator, its own human-owned floor and its own enforcement.
 
 ### 3.2 Is the problem a good fit?
 
@@ -152,7 +164,8 @@ Each step ends with something you can run. Do not reorder them.
 | 4 | Add a proposer behind a whitelist, offline heuristic first, LLM second | an unknown operation is rejected |
 | 5 | Add the cycle: propose, store candidate, score, gate, approve, roll back | `cycle`, `status`, `approve N`, `rollback N` all work |
 | 6 | Prove it on the live agent | a stored decision carries the new version and the behavior differs |
-| 7 | Add the next surface (tool access, richer guardrails) | its own scenarios and invariants exist before its code |
+| 7 | Add a second surface (here: tool access) | it has its own evaluator, human-owned floor and enforcement, and its scenarios existed before its code |
+| 8 | Harden what you built | you have tried to break each guard on purpose, and the scenarios are less regular than the first version |
 
 ### 3.4 What to swap and what to keep
 
@@ -160,10 +173,11 @@ Each step ends with something you can run. Do not reorder them.
 |---|---|
 | `HarnessConfigStore`: versioning, candidate/active/retired/rejected, activate, fallback | the manifest schema and `DEFAULT_MANIFEST` |
 | `validate_manifest` structure: bounds, unknown-field rejection, caps | the actual bounds and caps in `INVARIANTS` |
-| `evals/run_eval.py`: `evaluate`, `compare`, CLI | scenarios (`dev.json`, `heldout.json`) and the metric names |
+| `evals/run_eval.py`: `evaluate`, `compare`, CLI | scenarios (`dev.json`, `heldout.json`, `tools_dev.json`, `tools_heldout.json`) and the metric names |
 | `harness_evolve/loop.py`: cycle, approve, rollback, score recording | the operations in `patch.py` and their risk tiers |
 | `harness_evolve/proposer.py`: interface, strict LLM parsing | the heuristic proposer's lexicon |
 | `memory_policy.py`: user-scoped labels | nothing, unless your memory model differs |
+| `tool_guard.py`: offer filtered tools, block denied calls | `tool_access.py`: tool inventory, required floor, intent classifier |
 | | the pure decision function (`risk.py`) |
 
 ### 3.5 A hypothetical second use case (illustration only, not built)
@@ -220,6 +234,10 @@ Everything in 3.3 then applies unchanged.
 - Memory label invariant, enforced by a source-parsing test that was itself negative-tested.
 - Live A/B on the running agent.
 
+Manifest history in the author's local MongoDB: v1 is the baseline (retired), v2 added risk keywords
+and a threshold change (retired), v3 narrowed tool access (active). The first table below compares
+v1 and v2. The tool-access table compares the baseline and v3.
+
 | | Baseline (v1) | Evolved (v2) |
 |---|---|---|
 | Dev accuracy | 0.68 | 0.88 |
@@ -252,6 +270,16 @@ model naming a tool it was not offered) is proven offline with a fake model, not
   system prompt does not mention restrictions.
 - A cycle that touches only one surface skips the gate for the other surface (marked `untouched`),
   because the risk gate fails on any critical violation even when the baseline already had one.
+- The two gates do not use the same rule. The risk gate fails on any critical violation in the
+  candidate. The tool gate fails only when critical violations rise against the baseline. Pick one
+  rule before adding a third surface.
+- A claim in flight is inferred from tool-call order: a `file_claim` with no later
+  `send_notification`. A claim whose notification never fires keeps the claim-flow tools exposed in
+  every intent for that thread.
+- A disable-only tool patch is low risk and can auto-activate with `--auto-activate-low-risk`. The
+  first one disabled 17 tools at once. Consider requiring approval until the tool scenarios grow.
+- `enable_tool` is never proposed, so under-privilege failures are never acted on. A patch that
+  fails to apply is rejected without a stored record, so there is no audit trail for it.
 - The heuristic proposer only finds what its fixed phrase list contains. It demonstrates the loop,
   not intelligence.
 - The eval sets are small. A gain of 0.3 is a few scenarios.
@@ -262,7 +290,26 @@ model naming a tool it was not offered) is proven offline with a fake model, not
 
 ---
 
-## 6. Operating it, and the gotchas that cost time
+## 6. Verify it, operate it, and the gotchas that cost time
+
+### Verify the build in five minutes
+
+Run these from `agents/agent46` after `uv sync`. The baseline scores come from the built-in
+baseline manifest, so they do not depend on your database.
+
+| Command | Expect |
+|---|---|
+| `uv run pytest -q` | 291 passed. The tests that need the Docker stack skip themselves when it is not running. |
+| `uv run python -m evals.run_eval --manifest baseline --split dev` | accuracy 0.68, 1 critical violation |
+| `uv run python -m evals.run_eval --manifest baseline --split heldout` | accuracy 0.40, 0 critical violations |
+| `uv run python -m evals.tool_eval --manifest baseline --split dev` | accuracy 0.258, 23 critical violations |
+| `uv run python -m evals.tool_eval --manifest baseline --split heldout` | accuracy 0.286, 10 critical violations |
+| `uv run python -m harness_evolve.cli status` | with the Docker stack up, the stored manifest versions and their gate results |
+
+The live results in section 5 need the stack running and a real model key, so they are not part of
+this list.
+
+### Commands
 
 ```bash
 cd agents/agent46
@@ -273,6 +320,7 @@ agentengine dev status                  # shows the mongo port and the playgroun
 uv sync
 uv run pytest -q
 uv run python -m evals.run_eval --manifest baseline --split dev
+uv run python -m evals.tool_eval --manifest baseline --split dev
 uv run python -m harness_evolve.cli cycle --surface all     # or: risk | tools
 uv run python -m harness_evolve.cli status
 uv run python -m harness_evolve.cli approve 2
@@ -301,6 +349,17 @@ uv run python -m harness_evolve.cli rollback 1
 - **`.env.*` is git-ignored.** The committed template is `env.example`, with no leading dot.
 - **Runtime logs can contain conversation content.** `logs/` is ignored. Do not commit it.
 
+### Local state the playground was left in
+
+This lives in the Docker MongoDB, not in the repo, so a fresh checkout will not have it.
+
+- Manifests v1 and v2 retired, v3 active, in `harness_manifests` of `agent_agent46_local`.
+- Five test claims. Three are suspended for human review (`CLM-16734`, `CLM-73506`,
+  `CLM-51317`), two are closed (`CLM-57309` auto-approved under v1, `CLM-26611` approved after
+  review under v3). Each carries the `harness_version` that decided it.
+- A seeded test policy, `POL-HARNESS1`, owned by `harness-test-user-1`.
+- Throwaway memory users created during testing were deleted afterwards.
+
 ---
 
 ## 7. What to do next
@@ -318,7 +377,10 @@ uv run python -m harness_evolve.cli rollback 1
 6. **Handle negation in `risk.py`** so "no fire involved" stops matching the keyword.
 7. **Investigate the taxonomic extraction failures.** All five dead-lettered tasks failed with an
    empty model response, and `explain_insurance_term` depends on that memory.
-8. **Package this as a skill** once a second use case has been built by hand. Do not write the
+8. **Make the gates consistent and keep an audit trail.** Use one critical-violation rule for every
+   surface, store patches that fail to apply as rejected records, and decide whether disable-only
+   tool patches should need approval until the tool scenarios grow.
+9. **Package this as a skill** once a second use case has been built by hand. Do not write the
    skill from one example.
 
 ---
@@ -335,5 +397,9 @@ uv run python -m harness_evolve.cli rollback 1
 | Evaluator and invariants sit outside the evolvable layer | otherwise the proposer can grade itself |
 | Tool access narrows per intent and can only widen with approval | narrowing cannot break a workflow because required tools are fixed, widening is the risky direction |
 | Ambiguous intent maps to `general` (all tools) | a wrong guess can then only widen access, never strand a user |
+| A claim in flight keeps the claim-flow tools in every intent | an unrelated question mid-claim must not strand `resolve_claim` or `human_review` |
+| Keyword matching is whole-word with simple endings | prefix matching made "fireplace" a claim and "priceless" a quote |
+| One evaluator per surface, one combined gate per cycle | each surface has its own ground truth, and a change must not regress the other |
+| One resolver (`resolve_tool_access`) shared by agent, guard and evaluator | three copies of the logic would drift apart |
 | Memory label separator is `::` | a plain `_` join lets two different (user, key) pairs collide |
 | `uv.lock` stays git-ignored | the template's convention: CI resolves fresh under its cooldown policy |

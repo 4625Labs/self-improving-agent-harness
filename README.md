@@ -27,9 +27,10 @@ the evaluator decides, a human owns the limits.
 
 On the live agent, an arson claim was auto-approved under the baseline and sent to human review
 under the evolved manifest. With the evolved tool access the agent offered 10 of 17 tools for
-information and quote requests, and a full claim lifecycle still completed. The eval sets are small, so read the gains as directional. The
-proposer used for this run is an offline heuristic; the LLM proposer is written but has not been
-run.
+information and quote requests, and a full claim lifecycle still completed.
+
+The eval sets are small, so read the gains as directional. The proposers used here are offline
+heuristics; the LLM proposer is written but has not been run.
 
 ## Layout
 

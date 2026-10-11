@@ -10,8 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_agent46.harness_config import HarnessConfigStore  # noqa: E402
 
+from .budget import DailyBudget  # noqa: E402
 from .loop import approve, rollback, run_cycle  # noqa: E402
-from .proposer import CompositeProposer, HeuristicProposer, LLMProposer, ToolHeuristicProposer  # noqa: E402
+from .proposer import DEFAULT_CACHE_DIR, CompositeProposer, HeuristicProposer, LLMProposer, ToolHeuristicProposer  # noqa: E402
 
 # Local Docker Mongo port is assigned per machine: check `agentengine dev status` and override
 # with --uri or EVOLVE_MONGODB_URI. directConnection=true is required from the host.
@@ -73,13 +74,20 @@ def main(argv=None) -> int:
     p.add_argument("--max-tokens", type=int, default=600, help="LLM output cap (default 600)")
     p.add_argument("--max-failures", type=int, default=8, help="max failing scenarios in the LLM prompt (default 8)")
     p.add_argument("--auto-activate-low-risk", action="store_true")
-    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "court"])
+    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "court", "budget"])
     p.add_argument("version", nargs="?", type=int)
     a, rest = p.parse_known_args(argv)
     if a.command == "court":
         return _court_main(a, rest)
     if rest:
         p.error(f"unrecognized arguments: {' '.join(rest)}")
+    if a.command == "budget":  # before the store is reached: no Mongo needed
+        try:
+            out = DailyBudget(DEFAULT_CACHE_DIR).remaining()
+        except ValueError as e:
+            p.error(str(e))
+        print(json.dumps(out, indent=2))
+        return 0
     if a.dry_run:
         if a.command != "cycle" or a.proposer != "llm":
             p.error("--dry-run only applies to `cycle --proposer llm`")

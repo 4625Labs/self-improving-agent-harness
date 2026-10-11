@@ -108,7 +108,9 @@ def test_bad_reply_raises_without_retry_or_cache(tmp_path):
     with pytest.raises(PatchError):
         p.propose(DEFAULT_MANIFEST, [], {})
     assert len(fake.calls) == 1
-    assert not (tmp_path / "cache").exists()
+    # Only the daily ledger may exist; no cache entry is written for an unparseable reply.
+    cache = tmp_path / "cache"
+    assert {p.name for p in cache.glob("*.json")} <= {"ledger.json"}
 
 
 def test_parse_fenced_json():

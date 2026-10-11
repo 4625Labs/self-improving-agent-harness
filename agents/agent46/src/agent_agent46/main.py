@@ -42,7 +42,7 @@ from agent_agent46.harness_config import (
 from agent_agent46.llm import build_llm
 from agent_agent46.memory_policy import user_scoped_label
 from agent_agent46.risk import assess_claim_risk
-from agent_agent46 import observability
+from agent_agent46 import observability, tool_limits
 from agent_agent46.tool_guard import filter_tool_schemas, guarded_tool_node, resolve_allowed
 from agent_agent46.policy_store import (
     Claim,
@@ -1202,6 +1202,19 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
         from langchain_core.messages import HumanMessage
 
         messages = state["messages"]
+        if tool_limits.llm_steps_this_turn(messages) >= tool_limits.MAX_LLM_STEPS_PER_TURN:
+            from langchain_core.messages import AIMessage as _AIMessage
+
+            logger.warning("LLM step cap reached for this turn; handing off to a human")
+            observability.step_cap_hit()
+            return {
+                "messages": [
+                    _AIMessage(
+                        content="I'm sorry, I couldn't complete this request on my own. "
+                        "It needs a human team member to take a look."
+                    )
+                ]
+            }
         user_id = state.get("user_id", "")
         session_id = state.get("session_id", "")
         logger.info(f"User ID: {user_id}, Session ID: {session_id}")

@@ -21,7 +21,7 @@ from typing import Any, Optional
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
-from agent_agent46 import observability
+from agent_agent46 import observability, tool_limits
 from agent_agent46.tool_access import ALL_TOOLS, resolve_tool_access
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,38 @@ def _denial(call: dict[str, Any]) -> ToolMessage:
     )
 
 
+def _limit_denial(call: dict[str, Any]) -> ToolMessage:
+    return ToolMessage(
+        content=json.dumps({"error": "This tool call was not run because it exceeded a safety limit"}),
+        tool_call_id=call["id"],
+        name=call.get("name") or "",
+        status="error",
+    )
+
+
+def _limit_refusals(
+    history: list[BaseMessage], calls: list[dict[str, Any]], skip_ids: set[str]
+) -> dict[str, str]:
+    """Map call id -> rule for calls refused by tool_limits. Fails OPEN if check_call raises."""
+    refused: dict[str, str] = {}
+    accepted: list[dict[str, Any]] = []
+    for c in calls:
+        if c["id"] in skip_ids:
+            continue
+        try:
+            reason = tool_limits.check_call(
+                [*history, AIMessage(content="", tool_calls=accepted)], c
+            )
+        except Exception:
+            logger.error("Tool limit check failed; failing open", exc_info=True)
+            reason = None
+        if reason:
+            refused[c["id"]] = reason.split(":", 1)[0]
+        else:
+            accepted.append(c)
+    return refused
+
+
 def guarded_tool_node(
     tool_node: Any,
     get_allowed: Callable[[list[BaseMessage]], Iterable[str]],
@@ -128,8 +160,14 @@ def guarded_tool_node(
         allowed = frozenset(get_allowed(messages[:-1]))
         calls = list(last.tool_calls)
         denied_ids = {c["id"] for c in calls if c.get("name") not in allowed}
-        if not denied_ids:
+        limit_rules = _limit_refusals(messages[:-1], calls, denied_ids)
+        if not denied_ids and not limit_rules:
             return tool_node.invoke(state, config)
+        for c in calls:
+            if c["id"] in limit_rules:
+                logger.warning(f"Refused call to {c.get('name')}: limit {limit_rules[c['id']]}")
+                observability.tool_limit_hit(limit_rules[c["id"]], c.get("name"))
+        refused_ids = denied_ids | set(limit_rules)
 
         intent: Optional[str] = None
         if intent_of is not None:
@@ -145,7 +183,7 @@ def guarded_tool_node(
                     c.get("name"), intent=intent, session_id=session_id or None
                 )
 
-        kept = [c for c in calls if c["id"] not in denied_ids]
+        kept = [c for c in calls if c["id"] not in refused_ids]
         by_id: dict[str, Any] = {}
         extra: list[Any] = []
         if kept:
@@ -160,9 +198,11 @@ def guarded_tool_node(
                 else:
                     extra.append(item)  # e.g. a Command returned by a tool
         ordered = [
-            _denial(c) if c["id"] in denied_ids else by_id[c["id"]]
+            (_denial(c) if c["id"] in denied_ids else _limit_denial(c))
+            if c["id"] in refused_ids
+            else by_id[c["id"]]
             for c in calls
-            if c["id"] in denied_ids or c["id"] in by_id
+            if c["id"] in refused_ids or c["id"] in by_id
         ]
         return {"messages": ordered + extra}
 

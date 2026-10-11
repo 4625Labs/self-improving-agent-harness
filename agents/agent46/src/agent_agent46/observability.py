@@ -107,6 +107,14 @@ def tool_denied(
     track_event("tool_denied", tool=tool, intent=intent, session_id=session_id)
 
 
+def tool_limit_hit(rule: str, tool: Optional[str]) -> None:
+    track_event("tool_limit_hit", rule=rule, tool=tool)
+
+
+def step_cap_hit() -> None:
+    track_event("step_cap_hit")
+
+
 def access_failed_open() -> None:
     track_event("tool_access_failed_open")
 

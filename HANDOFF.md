@@ -8,8 +8,10 @@ Everything marked **verified** was run on a local Docker stack. Anything else is
 designed, untested, or unknown. Section 6 starts with a five-minute way to check the headline
 numbers yourself.
 
-Repository: `4625Labs/self-improving-agent-harness` (private). This document describes the state at
-the commit that added tool access (`38aa8da`), with the documentation revised afterwards.
+Repository: `4625Labs/self-improving-agent-harness` (private). This document describes the repository at
+commit `13f3323`. The code has not changed since the tool-access commit `38aa8da`; later commits
+only revise documentation, and a commit cannot cite its own hash, so the newest one may be a step
+ahead of this line.
 
 ---
 

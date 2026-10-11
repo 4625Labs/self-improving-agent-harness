@@ -166,3 +166,17 @@ def test_step_cap_short_circuits_llm():
     last = out["messages"][-1]
     assert isinstance(last, AIMessage) and not last.tool_calls
     assert "human" in last.content.lower()
+
+
+def test_thread_cap_never_strands_a_claim_in_flight():
+    """HANDOFF principle 15: after the thread cap, claim-completing tools must still run."""
+    from langchain_core.messages import AIMessage, HumanMessage
+    from agent_agent46 import tool_limits as tl
+
+    hist = [HumanMessage(content="old")]
+    for i in range(tl.MAX_TOOL_CALLS_PER_THREAD):
+        hist.append(AIMessage(content="", tool_calls=[{"id": f"c{i}", "name": "lookup_policy", "args": {"n": i}}]))
+    hist.append(HumanMessage(content="finish my claim"))
+    assert tl.check_call(hist, {"id": "x", "name": "lookup_policy", "args": {"n": 999}}).startswith(tl.RULE_THREAD)
+    for name in ("human_review", "resolve_claim", "send_notification", "check_claim_status"):
+        assert tl.check_call(hist, {"id": "y", "name": name, "args": {}}) is None

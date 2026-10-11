@@ -19,6 +19,10 @@ MAX_STRING_ARG_CHARS = 5000
 MAX_CLAIM_AMOUNT = 10_000_000
 MAX_LLM_STEPS_PER_TURN = 10
 
+# The per-thread cap never resets, so it must not strand a claim that is already in flight
+# (HANDOFF principle 15). These finish a claim; the per-turn and identical-call rules still apply.
+THREAD_CAP_EXEMPT = frozenset({"human_review", "resolve_claim", "send_notification", "check_claim_status"})
+
 # Rule names (used in telemetry).
 RULE_TURN = "calls_per_turn"
 RULE_IDENTICAL = "identical_calls"
@@ -91,7 +95,7 @@ def check_call(history: Sequence[BaseMessage], call: dict[str, Any]) -> Optional
     k = _key(call)
     if sum(1 for c in prior_turn if _key(c) == k) >= MAX_IDENTICAL_CALLS_PER_TURN:
         return f"{RULE_IDENTICAL}: this exact call was already repeated too many times"
-    if len(prior_all) >= MAX_TOOL_CALLS_PER_THREAD:
+    if len(prior_all) >= MAX_TOOL_CALLS_PER_THREAD and call.get("name") not in THREAD_CAP_EXEMPT:
         return f"{RULE_THREAD}: too many tool calls in this conversation"
     for name, value in (call.get("args") or {}).items():
         r = _bad_arg(str(name), value)

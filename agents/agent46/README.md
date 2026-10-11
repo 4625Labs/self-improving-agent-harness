@@ -155,3 +155,23 @@ nominated, and `review_resumed` disagreements stay with `court scan`. Mutating r
 
 Not automated: there is no Raindrop read API wired up. Ingestion is from an exported file, or from events pasted from the
 Raindrop MCP into a file; nothing polls Raindrop.
+
+## Copy manifest history to Atlas (atlas-sync)
+
+Copies only the `harness_manifests` history (versions >= 2) from local dev Mongo to the Atlas Mongo, keeping Atlas's own
+v1 and ending with exactly one active version. Set `ATLAS_EVOLVE_URI` and `ATLAS_EVOLVE_DB` in `agents/agent46/.env`.
+Dry run is the default and writes nothing (no `--allow-remote` needed). No URI or password is ever printed.
+
+```
+cd agents/agent46
+uv run python -m harness_evolve.cli atlas-sync
+```
+
+Review the plan, then run this yourself in the Claude Code prompt (the `! ` prefix runs it in your shell):
+
+```
+! cd agents/agent46 && uv run python -m harness_evolve.cli atlas-sync --apply --yes --by YOURNAME --allow-remote
+```
+
+It refuses (exit 2) on unknown target versions or conflicting manifests (`--force` overrides only those), is idempotent,
+verifies the target after writing, and records one `atlas_sync.manifests` row in the target's `audit_log`.

@@ -263,6 +263,8 @@ harness_evolve/budget.py             daily LLM call and token ledger
 evals/limits_eval.py                 third evaluator (24 dev, 13 held-out scenarios)
 evals/scenarios/docket.json          court convictions; merged into dev only (user data, untracked)
 tests/conftest.py                    isolates every test from the real docket
+harness_evolve/raindrop_source.py    exported Raindrop events -> advisory nominations
+harness_evolve/atlas_sync.py         copy manifests local -> Atlas (dry-run by default, masks URIs)
 ```
 
 ---
@@ -431,6 +433,9 @@ uv run python -m harness_evolve.cli budget                     # daily LLM budge
 uv run python -m harness_evolve.cli --by NAME approve 5 --yes   # also reject V / rollback V
 uv run python -m harness_evolve.cli audit --n 20
 uv run python -m evals.limits_eval --manifest baseline --split dev
+uv run python -m harness_evolve.cli court ingest-events events.json --dry-run   # Raindrop export -> nominations
+uv run python -m harness_evolve.cli atlas-sync                                  # dry run, writes nothing
+# the operator runs the write: atlas-sync --apply --yes --by NAME --allow-remote
 ```
 
 The verify-in-five-minutes numbers above hold only with an empty docket. Run them with
@@ -451,6 +456,11 @@ The verify-in-five-minutes numbers above hold only with an empty docket. Run the
 - **A nominated claim id cannot be re-nominated** after its case is dismissed. Give the corrected
   scenario a new claim id.
 - **The app logs the human-review pause (`GraphInterrupt`) at ERROR.** It is not a failure.
+- **Atlas from the host can fail transiently.** A first connection saw only one of three nodes
+  (`ReplicaSetNoPrimary`); a retry minutes later reached the primary. Retry before changing anything.
+- **A permission classifier may refuse writes to shared resources** (a cloud secret that sends
+  conversation text out, writes to the Atlas cluster). Treat the refusal as a stop: build a reviewed
+  command with a dry-run default and let the operator run the write.
 - **Mongo from the host needs `?directConnection=true`.** The Docker Mongo advertises an internal
   hostname, so a plain `mongodb://localhost:<port>` times out. The port is assigned per machine.
 - **Invoking the agent needs a `user_id`.** Without one the runtime fails with
@@ -585,9 +595,9 @@ Workspace `agent46` is linked to `Cluster0` through `agentengine atlas`. Status 
 | Build and deploy of the second-round code | **done**: image `sha-095c995...`, revision r2, 5 of 5 components ready |
 | Deployed egress allow-list | **done**: `api.openai.com` and `api.raindrop.ai` on 443 (`agentengine egress`) |
 | Cloud secrets | **done**: `RAINDROP_WRITE_KEY` and `RAINDROP_SEND_CONTENT=false` added (project scope, via `--stdin`). Content sending is off in the cloud on purpose. |
-| Cloud invoke | **done**: an info question was answered by the deployed agent |
+| Cloud invoke | **done**: info questions were answered by the deployed agent after the sync, with `RAINDROP_SEND_CONTENT=true` synced |
 | New code confirmed in runtime logs | **not confirmed**: the platform logs only startup lines, not turns. Check for an `agent_turn` event from the cloud in Raindrop. |
-| Manifests v1 to v6 in Atlas | **prepared, not yet applied**: `atlas-sync` (dry-run by default) copies v2 to v6 next to the cloud's own baseline v1 and leaves v6 as the single active version. Dry-run reviewed: 1 retire, 5 inserts. The operator runs the apply step. Needs `ATLAS_EVOLVE_URI` and `ATLAS_EVOLVE_DB` in `.env`. |
+| Manifests v1 to v6 in Atlas | **done and verified**: `atlas-sync` copied v2 to v6 next to the cloud's own baseline v1 (retired). v6 is the single active version; a second dry-run reports no changes. The operator ran the apply step; the assistant never wrote to the cluster. Needs `ATLAS_EVOLVE_URI` and `ATLAS_EVOLVE_DB` in `.env`. |
 | Court and docket against Atlas | **not done**: `harness_evolve --uri` takes the same string. `docket.json` is a file kept on the host. |
 
 Things learned while deploying:

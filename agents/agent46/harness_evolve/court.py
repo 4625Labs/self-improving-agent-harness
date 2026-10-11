@@ -166,6 +166,69 @@ class CourtDocket:
             "status": "dismissed", "dismissed_by": by, "dismiss_note": note, "dismissed_at": _now()}})
         return self._get(case_id)
 
+    def _history_entry(self, case: dict, by: str, reason: str, action: str) -> dict:
+        return {"action": action, "previous_expected": case.get("expected_recommendation"),
+                "previous_critical": bool(case.get("critical")), "by": by, "reason": reason, "ts": _now()}
+
+    def overturn(self, case_id: str, expected_recommendation: str, critical: bool, by: str, reason: str, *,
+                 confirmed: bool = False) -> dict:
+        """Appeal: change a convicted case's verdict in place. Needs confirmed=True and a reason; audited."""
+        return run_confirmed(self._db, "court.overturn", by, case_id,
+                             {"expected": expected_recommendation, "critical": bool(critical), "reason": reason},
+                             confirmed,
+                             lambda: self._overturn(case_id, expected_recommendation, critical, by, reason))
+
+    def _overturn(self, case_id, expected_recommendation, critical, by, reason) -> dict:
+        if expected_recommendation not in VALID_RECOMMENDATIONS:
+            raise ValueError(f"expected_recommendation must be one of {sorted(VALID_RECOMMENDATIONS)}")
+        if not (reason or "").strip():
+            raise ValueError("a reason is required to overturn a verdict")
+        case = self._get(case_id)
+        if case["status"] != "convicted":
+            raise ValueError(f"case {case_id} is {case['status']}; only convicted cases can be overturned")
+        sid = case["draft"]["id"]
+        docket = self._load_docket()
+        new = {"expected": {"recommendation": expected_recommendation},
+               "severity": "critical" if critical else "normal"}
+        found = False
+        out = []
+        for s in docket:
+            if s.get("id") == sid:
+                if found:
+                    continue  # drop any pre-existing duplicate of the same id
+                s = {**s, **new}
+                found = True
+            out.append(s)
+        if not found:
+            s = dict(case["draft"])
+            s.update(new)
+            s["tags"] = list(dict.fromkeys(list(s.get("tags", [])) + ["source:court"]))
+            out.append(s)
+        self._write_docket(out)
+        history = list(case.get("history", [])) + [self._history_entry(case, by, reason, "overturn")]
+        self._cases.update_one({"case_id": case_id}, {"$set": {
+            "expected_recommendation": expected_recommendation, "critical": bool(critical), "history": history}})
+        return self._get(case_id)
+
+    def retract(self, case_id: str, by: str, reason: str, *, confirmed: bool = False) -> dict:
+        """Remove a convicted case's scenario from docket.json and mark it dismissed. Audited."""
+        return run_confirmed(self._db, "court.retract", by, case_id, {"reason": reason}, confirmed,
+                             lambda: self._retract(case_id, by, reason))
+
+    def _retract(self, case_id, by, reason) -> dict:
+        if not (reason or "").strip():
+            raise ValueError("a reason is required to retract a verdict")
+        case = self._get(case_id)
+        if case["status"] != "convicted":
+            raise ValueError(f"case {case_id} is {case['status']}; only convicted cases can be retracted")
+        sid = case["draft"]["id"]
+        self._write_docket([s for s in self._load_docket() if s.get("id") != sid])
+        history = list(case.get("history", [])) + [self._history_entry(case, by, reason, "retract")]
+        self._cases.update_one({"case_id": case_id}, {"$set": {
+            "status": "dismissed", "dismissed_by": by, "dismiss_note": f"retracted: {reason}",
+            "dismissed_at": _now(), "history": history}})
+        return self._get(case_id)
+
     def list_cases(self, status=None) -> list:
         q = {"status": status} if status else {}
         return [_clean(c) for c in self._cases.find(q)]

@@ -46,11 +46,21 @@ def _court_main(a, rest) -> int:
     d.add_argument("case_id")
     d.add_argument("--by")
     d.add_argument("--note", default="")
+    o = sub.add_parser("overturn")
+    o.add_argument("case_id")
+    o.add_argument("expected")
+    o.add_argument("--critical", action="store_true")
+    o.add_argument("--by")
+    o.add_argument("--reason", default="")
+    r = sub.add_parser("retract")
+    r.add_argument("case_id")
+    r.add_argument("--by")
+    r.add_argument("--reason", default="")
     ls = sub.add_parser("list")
     ls.add_argument("--status")
     c = cp.parse_args(rest)
     by = getattr(c, "by", None) or a.by or os_user()
-    if c.action in ("verdict", "dismiss") and not (getattr(c, "by", None) or a.by):
+    if c.action in ("verdict", "dismiss", "overturn", "retract") and not (getattr(c, "by", None) or a.by):
         print(f"note: --by not given; recording actor as OS user '{by}'", file=sys.stderr)
     if c.action != "list":
         check_remote(a.uri, a.allow_remote)
@@ -65,6 +75,10 @@ def _court_main(a, rest) -> int:
         out = court.verdict(c.case_id, c.expected, c.critical, by, confirmed=a.yes)
     elif c.action == "dismiss":
         out = court.dismiss(c.case_id, by, c.note, confirmed=a.yes)
+    elif c.action == "overturn":
+        out = court.overturn(c.case_id, c.expected, c.critical, by, c.reason, confirmed=a.yes)
+    elif c.action == "retract":
+        out = court.retract(c.case_id, by, c.reason, confirmed=a.yes)
     else:
         out = court.list_cases(c.status)
     print(json.dumps(out, indent=2, default=str))

@@ -403,15 +403,38 @@ def analyze_claim_risk(claim_id: str) -> str:
             "status": "under_review",
         },
     )
+    description = claim.get("description")
     observability.risk_assessed(
         claim_id=claim_id,
         risk=result["risk_assessment"],
         recommendation=result["recommendation"],
         harness_version=harness_version,
         user_id=user_id,
+        claim_amount=claim.get("claim_amount"),
+        claim_type=claim.get("claim_type"),
+        policy_number=policy_number,
+        # Length only: the description text itself never leaves the process.
+        description_len=len(description) if isinstance(description, str) else None,
+        previous_claims_count=len(previous_claims),
     )
 
     return json.dumps(result, indent=2)
+
+
+def _stored_recommendation(claim_id: str, user_id: str) -> dict:
+    """The claim's stored recommendation and the harness version that produced it, for telemetry.
+
+    Never raises: a failed lookup only means the review event carries fewer fields.
+    """
+    try:
+        claim = claim_store.get_claim(claim_id, user_id) or {}
+        return {
+            "recommendation": claim.get("recommendation"),
+            "harness_version": claim.get("harness_version"),
+        }
+    except Exception:
+        logger.debug("Could not read stored recommendation for telemetry", exc_info=True)
+        return {}
 
 
 @app.tool()
@@ -476,7 +499,14 @@ def human_review(
     if not isinstance(reviewer_notes, str):
         raise TypeError("human review reviewer_notes must be a string")
 
-    observability.review_resumed(claim_id=claim_id, decision=review_decision, user_id=user_id)
+    stored = _stored_recommendation(claim_id, user_id)
+    observability.review_resumed(
+        claim_id=claim_id,
+        decision=review_decision,
+        user_id=user_id,
+        recommendation=stored.get("recommendation"),
+        harness_version=stored.get("harness_version"),
+    )
 
     # Review complete: restore the resolvable analysis state so resolve_claim
     # accepts the reviewer's decision next.
@@ -1275,7 +1305,16 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
     logger.info("  → Compiling graph...")
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", guarded_tool_node(ToolNode(tools), tools_allowed))
+    builder.add_node(
+        "tools",
+        guarded_tool_node(
+            ToolNode(tools),
+            tools_allowed,
+            intent_of=lambda history: resolve_allowed(
+                load_active_manifest(config_store)[1], history
+            )[0],
+        ),
+    )
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", should_continue, {"tools": "tools", "end": END})
     builder.add_edge("tools", "agent")

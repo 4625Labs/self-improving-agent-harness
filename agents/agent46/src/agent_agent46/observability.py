@@ -45,6 +45,14 @@ def _text(value: Optional[str]) -> str:
     return value or ""
 
 
+def _str(value: Any) -> str:
+    """str() that can never raise, so a bad value cannot break a customer turn."""
+    try:
+        return str(value)
+    except Exception:
+        return "<unprintable>"
+
+
 def track_event(
     name: str,
     *,
@@ -55,10 +63,10 @@ def track_event(
     **properties: Any,
 ) -> None:
     """Send one event. Never raises."""
-    client = _client()
-    if client is None:
-        return
     try:
+        client = _client()
+        if client is None:
+            return
         client.track_ai(
             user_id=user_id or "unknown",
             event=name,
@@ -93,8 +101,10 @@ def track_turn(
     )
 
 
-def tool_denied(tool: Optional[str]) -> None:
-    track_event("tool_denied", tool=tool)
+def tool_denied(
+    tool: Optional[str], *, intent: Optional[str] = None, session_id: Optional[str] = None
+) -> None:
+    track_event("tool_denied", tool=tool, intent=intent, session_id=session_id)
 
 
 def access_failed_open() -> None:
@@ -106,21 +116,52 @@ def manifest_fallback(reason: str) -> None:
 
 
 def risk_assessed(
-    *, claim_id: str, risk: Any, recommendation: Any, harness_version: Any, user_id: Optional[str]
+    *,
+    claim_id: str,
+    risk: Any,
+    recommendation: Any,
+    harness_version: Any,
+    user_id: Optional[str],
+    claim_amount: Optional[float] = None,
+    claim_type: Optional[str] = None,
+    policy_number: Optional[str] = None,
+    description_len: Optional[int] = None,
+    previous_claims_count: Optional[int] = None,
 ) -> None:
+    """Record a risk assessment. Only the description's length is sent, never its text."""
     track_event(
         "risk_assessed",
         user_id=user_id,
         claim_id=claim_id,
-        risk=str(risk),
-        recommendation=str(recommendation),
+        risk=_str(risk),
+        recommendation=_str(recommendation),
         harness_version=harness_version,
+        claim_amount=claim_amount,
+        claim_type=claim_type,
+        policy_number=policy_number,
+        description_len=description_len,
+        previous_claims_count=previous_claims_count,
     )
 
 
 def review_suspended(*, claim_id: str, risk_level: Any, user_id: Optional[str]) -> None:
-    track_event("review_suspended", user_id=user_id, claim_id=claim_id, risk_level=str(risk_level))
+    track_event("review_suspended", user_id=user_id, claim_id=claim_id, risk_level=_str(risk_level))
 
 
-def review_resumed(*, claim_id: str, decision: str, user_id: Optional[str]) -> None:
-    track_event("review_resumed", user_id=user_id, claim_id=claim_id, decision=decision)
+def review_resumed(
+    *,
+    claim_id: str,
+    decision: str,
+    user_id: Optional[str],
+    recommendation: Any = None,
+    harness_version: Any = None,
+) -> None:
+    """Record a reviewer's decision, with the claim's stored recommendation when known."""
+    track_event(
+        "review_resumed",
+        user_id=user_id,
+        claim_id=claim_id,
+        decision=decision,
+        recommendation=_str(recommendation) if recommendation is not None else None,
+        harness_version=harness_version,
+    )

@@ -18,6 +18,7 @@ from evals.run_eval import AUTO, RANK, load_scenarios
 
 from agent_agent46.tool_access import INTENTS, REQUIRED_TOOLS, effective_tool_access
 
+from .budget import BudgetExceeded, DailyBudget
 from .patch import OP_SCHEMA, PatchError, validate_ops
 
 TOOL_OPS = ("disable_tool", "enable_tool")
@@ -135,10 +136,6 @@ class CompositeProposer:
         return {"ops": ops, "rationale": "; ".join(n for n in notes if n)}
 
 
-class BudgetExceeded(RuntimeError):
-    """Raised when the per-process LLM call limit (EVOLVE_LLM_MAX_CALLS) is reached."""
-
-
 _CALLS = 0  # real (uncached) LLM calls made by this process
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / ".evolve_cache"  # gitignored
 
@@ -181,13 +178,15 @@ class LLMProposer:
     surface = "all"
 
     def __init__(self, model: str | None = None, *, max_tokens: int = 600, max_failures: int = 8,
-                 cache_dir: Path | str | None = None, max_calls: int | None = None, client=None) -> None:
+                 cache_dir: Path | str | None = None, max_calls: int | None = None, client=None,
+                 budget: DailyBudget | None = None) -> None:
         self._model = model
         self.max_tokens = max_tokens
         self.max_failures = max_failures
         self.cache_dir = Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR
         self._max_calls = max_calls
         self._client = client or _default_client
+        self.budget = budget if budget is not None else DailyBudget(self.cache_dir)
 
     @property
     def model(self) -> str:
@@ -258,8 +257,17 @@ class LLMProposer:
             limit = self._limit()
             if _CALLS >= limit:
                 raise BudgetExceeded(f"LLM call limit reached ({_CALLS}/{limit}); raise EVOLVE_LLM_MAX_CALLS to allow more")
+            prompt_tokens = estimate_tokens(prompt)
+            # Reserve the worst case (full output) before calling; the daily ledger is the persistent limit.
+            reservation = self.budget.check_and_reserve(prompt_tokens + self.max_tokens)
             _CALLS += 1
-            raw = self._client(prompt, self.model, self.max_tokens)
+            try:
+                raw = self._client(prompt, self.model, self.max_tokens)
+            except BaseException:
+                _CALLS -= 1
+                self.budget.release(reservation)  # no reply, so nothing was spent
+                raise
+            self.budget.record(prompt_tokens + estimate_tokens(raw), reservation)
             result = self.parse(raw)  # only cache replies that parse and validate
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"model": self.model, "raw": raw}))

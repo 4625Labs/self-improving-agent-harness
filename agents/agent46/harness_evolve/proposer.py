@@ -7,9 +7,11 @@ Each proposer has a `surface` ('risk', 'tools' or 'all'); a proposer without one
 (see loop._collect_proposals). CompositeProposer groups several proposers via `members`.
 """
 
+import hashlib
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Protocol
 
 from evals.run_eval import AUTO, RANK, load_scenarios
@@ -133,28 +135,89 @@ class CompositeProposer:
         return {"ops": ops, "rationale": "; ".join(n for n in notes if n)}
 
 
+class BudgetExceeded(RuntimeError):
+    """Raised when the per-process LLM call limit (EVOLVE_LLM_MAX_CALLS) is reached."""
+
+
+_CALLS = 0  # real (uncached) LLM calls made by this process
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / ".evolve_cache"  # gitignored
+
+
+def reset_call_count() -> None:
+    global _CALLS
+    _CALLS = 0
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough estimate (~4 chars per token)."""
+    return (len(text) + 3) // 4
+
+
+def _severity_key(f: dict) -> tuple:
+    gap = RANK.get(f.get("expected"), 0) - RANK.get(f.get("got"), 0)
+    crit = bool(f.get("critical_violation")) or f.get("severity") == "critical"
+    return (not crit, -gap, str(f.get("id")))
+
+
+def _default_client(prompt: str, model: str, max_tokens: int) -> str:
+    from langchain_openai import ChatOpenAI
+    from pydantic import SecretStr
+
+    key = os.environ.get("LLM_API_KEY", "")
+    if not key:
+        raise RuntimeError("LLM_API_KEY is missing")
+    llm = ChatOpenAI(model=model, api_key=SecretStr(key), use_responses_api=True, max_tokens=max_tokens)
+    return llm.invoke(prompt).text
+
+
 class LLMProposer:
-    """LLM-backed proposer. Network only when invoked; never used unless --proposer llm."""
+    """LLM-backed proposer: one call per cycle, capped prompt and output, cached, call-limited.
+
+    Network only when invoked; never used unless --proposer llm. `client(prompt, model, max_tokens)`
+    is injectable for tests. Parse/validation failures raise; there is no retry.
+    """
 
     name = "llm"
     surface = "all"
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, *, max_tokens: int = 600, max_failures: int = 8,
+                 cache_dir: Path | str | None = None, max_calls: int | None = None, client=None) -> None:
         self._model = model
+        self.max_tokens = max_tokens
+        self.max_failures = max_failures
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else DEFAULT_CACHE_DIR
+        self._max_calls = max_calls
+        self._client = client or _default_client
+
+    @property
+    def model(self) -> str:
+        from agent_agent46.llm import MODEL
+
+        return self._model or MODEL
+
+    def _cap(self, failures: list[dict]) -> tuple[list[dict], int]:
+        ordered = sorted(failures, key=_severity_key)
+        return ordered[: self.max_failures], max(0, len(ordered) - self.max_failures)
 
     def build_prompt(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> str:
-        dev = {s["id"]: s for s in load_scenarios("dev")}
+        dev = {s["id"]: s for s in load_scenarios("dev")}  # never heldout
+        shown, omitted = self._cap(failures)
         cases = []
-        for f in failures:
+        for f in shown:
             sc = dev.get(f["id"])
             if sc:
-                cases.append({"failure": f, "claim": sc["claim"], "policy": sc["policy"],
+                cases.append({"id": f["id"], "expected": f["expected"], "got": f["got"], "severity": f.get("severity"),
+                              "claim": sc["claim"], "policy": sc["policy"],
                               "previous_claims_count": sc["previous_claims_count"]})
+        tshown, tomitted = self._cap(tool_failures or [])
+        omit_note = f"({omitted} more failing dev scenarios omitted; worst {len(shown)} shown, critical first)\n" if omitted else ""
+        tomit_note = f"({tomitted} more tool failures omitted)\n" if tomitted else ""
+        summary = {k: v for k, v in split_summary.items() if k != "failed_ids"}
         return (
             "You improve an insurance claim triage harness by patching its manifest.\n"
-            f"Current manifest:\n{json.dumps(manifest, indent=1)}\n\n"
-            f"Dev summary: {json.dumps(split_summary)}\n"
-            f"Failing dev scenarios:\n{json.dumps(cases, indent=1)}\n\n"
+            f"Current manifest:\n{json.dumps(manifest, separators=(',', ':'))}\n\n"
+            f"Dev summary: {json.dumps(summary)}\n"
+            f"Failing dev scenarios:\n{json.dumps(cases, separators=(',', ':'))}\n{omit_note}\n"
             f"Allowed ops (exact fields, nothing else): {json.dumps({k: list(v) for k, v in OP_SCHEMA.items()})}\n"
             "level is 'high' or 'medium'. Never remove baseline keywords. Never ship critical claims as auto_approve.\n"
             f"Tool access (manifest 'tool_access'; ops disable_tool/enable_tool, intent in {list(INTENTS)}). "
@@ -162,29 +225,58 @@ class LLMProposer:
             "Never disable a required tool: "
             f"{json.dumps({k: sorted(v) for k, v in REQUIRED_TOOLS.items() if k != 'general'})}. "
             "The 'general' intent may never be narrowed.\n"
-            f"Failing dev tool-access cases:\n{json.dumps(tool_failures or [], indent=1)}\n"
+            f"Failing dev tool-access cases:\n{json.dumps(tshown, separators=(',', ':'))}\n{tomit_note}"
             'Reply with ONLY JSON: {"ops": [...], "rationale": "..."}'
         )
 
+    def _cache_path(self, prompt: str) -> Path:
+        h = hashlib.sha256(json.dumps([prompt, self.model]).encode()).hexdigest()
+        return self.cache_dir / f"{h}.json"
+
+    def _limit(self) -> int:
+        if self._max_calls is not None:
+            return self._max_calls
+        return int(os.environ.get("EVOLVE_LLM_MAX_CALLS", "3"))
+
+    def dry_run(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
+        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures)
+        return {"prompt": prompt, "prompt_chars": len(prompt), "estimated_prompt_tokens": estimate_tokens(prompt),
+                "max_output_tokens": self.max_tokens, "model": self.model,
+                "cached": self._cache_path(prompt).exists(), "calls_allowed": self._limit()}
+
     def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
-        from langchain_openai import ChatOpenAI
-        from pydantic import SecretStr
-
-        key = os.environ.get("LLM_API_KEY", "")
-        if not key:
-            raise RuntimeError("LLM_API_KEY is missing")
-        from agent_agent46.llm import MODEL
-
-        llm = ChatOpenAI(model=self._model or MODEL, api_key=SecretStr(key), use_responses_api=True)
-        raw = llm.invoke(self.build_prompt(manifest, failures, split_summary, tool_failures)).text
+        global _CALLS
+        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures)
+        path = self._cache_path(prompt)
+        raw = None
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text())["raw"]
+            except (OSError, ValueError, KeyError):
+                raw = None
+        if raw is None:
+            limit = self._limit()
+            if _CALLS >= limit:
+                raise BudgetExceeded(f"LLM call limit reached ({_CALLS}/{limit}); raise EVOLVE_LLM_MAX_CALLS to allow more")
+            _CALLS += 1
+            raw = self._client(prompt, self.model, self.max_tokens)
+            result = self.parse(raw)  # only cache replies that parse and validate
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"model": self.model, "raw": raw}))
+            return result
         return self.parse(raw)
 
     @staticmethod
     def parse(raw: str) -> dict:
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+        m = fence or re.search(r"\{.*\}", raw, re.DOTALL)
         if not m:
             raise PatchError("no JSON object in LLM reply")
-        data = json.loads(m.group(0))
+        text = m.group(1) if fence else m.group(0)
+        try:
+            data = json.loads(text)
+        except ValueError as e:
+            raise PatchError(f"LLM reply is not valid JSON: {e}") from e
         if not isinstance(data, dict) or set(data) - {"ops", "rationale"} or "ops" not in data:
             raise PatchError("LLM reply must be exactly {ops, rationale}")
         validate_ops(data["ops"])

@@ -16,14 +16,17 @@ from typing import Any, Protocol
 
 from evals.run_eval import AUTO, RANK, load_scenarios
 
+from agent_agent46.harness_config import INVARIANTS
 from agent_agent46.tool_access import INTENTS, REQUIRED_TOOLS, effective_tool_access
+from agent_agent46.tool_limits import baseline_limits
 
 from .budget import BudgetExceeded, DailyBudget
 from .patch import OP_SCHEMA, PatchError, validate_ops
 
 TOOL_OPS = ("disable_tool", "enable_tool")
-RISK_OPS = tuple(k for k in OP_SCHEMA if k not in TOOL_OPS)
-SURFACES = ("risk", "tools", "all")
+LIMIT_OPS = ("set_limit",)
+RISK_OPS = tuple(k for k in OP_SCHEMA if k not in TOOL_OPS and k not in LIMIT_OPS)
+SURFACES = ("risk", "tools", "limits", "all")
 
 # Phrases that signal fraud/severity. Matched against dev failure descriptions only.
 RISK_LEXICON = [
@@ -115,6 +118,39 @@ class ToolHeuristicProposer:
         return {"ops": ops, "rationale": "; ".join(notes) or "no tool heuristic applies"}
 
 
+class LimitsHeuristicProposer:
+    """Offline, deterministic. Raises the runaway limits just enough to cover legit traces that dev
+    wrongly capped, never above the human-owned bound and never touching runaway traces.
+
+    Everything it needs is in the dev limits failures it is handed; it loads no scenario files.
+    A raise is high risk (needs human approval) and is gated by the limits evaluator.
+    """
+
+    name = "limits-heuristic"
+    surface = "limits"
+
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict) -> dict:
+        cur = dict(manifest.get("limits") or baseline_limits())
+        bounds = INVARIANTS["limits_bounds"]
+        need = {"max_llm_steps_per_turn": ("llm_steps", cur["max_llm_steps_per_turn"]),
+                "max_tool_calls_per_turn": ("tool_calls", cur["max_tool_calls_per_turn"])}
+        ops: list[dict[str, Any]] = []
+        notes: list[str] = []
+        legit = [f for f in failures if f.get("outcome") == "false_cap" and f.get("kind") == "legit"]
+        for name, (field, now) in need.items():
+            wanted = [f[field] for f in legit if isinstance(f.get(field), int) and f[field] > now]
+            if not wanted:
+                continue
+            target = max(wanted)  # the smallest value that lets every falsely capped trace complete
+            if target > bounds[name][1]:
+                notes.append(f"{name}: needs {target} but the bound is {bounds[name][1]}; not proposed")
+                continue
+            ops.append({"op": "set_limit", "name": name, "value": target})
+            notes.append(f"{len(wanted)} legit trace(s) falsely capped: {name} {now} -> {target}")
+        validate_ops(ops)
+        return {"ops": ops, "rationale": "; ".join(notes) or "no limits heuristic applies"}
+
+
 class CompositeProposer:
     """Runs several proposers, each on its own surface. The loop feeds each member its own failures."""
 
@@ -124,11 +160,13 @@ class CompositeProposer:
         self.members = list(members)
         self.name = "+".join(m.name for m in self.members)
 
-    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None,
+                limits_failures: list[dict] | None = None) -> dict:
         ops: list[dict[str, Any]] = []
         notes: list[str] = []
         for m in self.members:
-            fs = (tool_failures or []) if getattr(m, "surface", "risk") == "tools" else failures
+            ms = getattr(m, "surface", "risk")
+            fs = (tool_failures or []) if ms == "tools" else (limits_failures or []) if ms == "limits" else failures
             out = m.propose(manifest, fs, split_summary)
             ops += out["ops"]
             notes.append(out.get("rationale", ""))
@@ -198,7 +236,8 @@ class LLMProposer:
         ordered = sorted(failures, key=_severity_key)
         return ordered[: self.max_failures], max(0, len(ordered) - self.max_failures)
 
-    def build_prompt(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> str:
+    def build_prompt(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None,
+                     limits_failures: list[dict] | None = None) -> str:
         dev = {s["id"]: s for s in load_scenarios("dev")}  # never heldout
         shown, omitted = self._cap(failures)
         cases = []
@@ -211,6 +250,10 @@ class LLMProposer:
         tshown, tomitted = self._cap(tool_failures or [])
         omit_note = f"({omitted} more failing dev scenarios omitted; worst {len(shown)} shown, critical first)\n" if omitted else ""
         tomit_note = f"({tomitted} more tool failures omitted)\n" if tomitted else ""
+        lshown, lomitted = self._cap(limits_failures or [])
+        lshown = [{k: v for k, v in f.items() if k != "critical_violation"} for f in lshown]
+        lomit_note = f"({lomitted} more limits failures omitted)\n" if lomitted else ""
+        lb = INVARIANTS["limits_bounds"]
         summary = {k: v for k, v in split_summary.items() if k != "failed_ids"}
         return (
             "You improve an insurance claim triage harness by patching its manifest.\n"
@@ -225,6 +268,11 @@ class LLMProposer:
             f"{json.dumps({k: sorted(v) for k, v in REQUIRED_TOOLS.items() if k != 'general'})}. "
             "The 'general' intent may never be narrowed.\n"
             f"Failing dev tool-access cases:\n{json.dumps(tshown, separators=(',', ':'))}\n{tomit_note}"
+            "Runaway limits (manifest 'limits'; op set_limit {name, value}; name in "
+            f"{list(lb)}; integer values within {json.dumps({k: list(v) for k, v in lb.items()})}). "
+            "Lowering a limit is low risk; RAISING one needs human approval and must not let a runaway trace through. "
+            "outcome false_cap = a legit trace was wrongly capped (limit too low); missed_cap = a runaway slipped through (limit too high).\n"
+            f"Failing dev limits cases:\n{json.dumps(lshown, separators=(',', ':'))}\n{lomit_note}"
             'Reply with ONLY JSON: {"ops": [...], "rationale": "..."}'
         )
 
@@ -237,15 +285,17 @@ class LLMProposer:
             return self._max_calls
         return int(os.environ.get("EVOLVE_LLM_MAX_CALLS", "3"))
 
-    def dry_run(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
-        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures)
+    def dry_run(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None,
+                limits_failures: list[dict] | None = None) -> dict:
+        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures, limits_failures)
         return {"prompt": prompt, "prompt_chars": len(prompt), "estimated_prompt_tokens": estimate_tokens(prompt),
                 "max_output_tokens": self.max_tokens, "model": self.model,
                 "cached": self._cache_path(prompt).exists(), "calls_allowed": self._limit()}
 
-    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None,
+                limits_failures: list[dict] | None = None) -> dict:
         global _CALLS
-        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures)
+        prompt = self.build_prompt(manifest, failures, split_summary, tool_failures, limits_failures)
         path = self._cache_path(prompt)
         raw = None
         if path.exists():

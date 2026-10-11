@@ -16,7 +16,7 @@ from agent_agent46.harness_config import HarnessConfigStore  # noqa: E402
 from .audit import ConfirmationRequired, RemoteRefused, check_remote, os_user, recent  # noqa: E402
 from .budget import DailyBudget  # noqa: E402
 from .loop import approve, reject, rollback, run_cycle  # noqa: E402
-from .proposer import DEFAULT_CACHE_DIR, CompositeProposer, HeuristicProposer, LLMProposer, ToolHeuristicProposer  # noqa: E402
+from .proposer import DEFAULT_CACHE_DIR, CompositeProposer, HeuristicProposer, LimitsHeuristicProposer, LLMProposer, ToolHeuristicProposer  # noqa: E402
 
 # Local Docker Mongo port is assigned per machine: check `agentengine dev status` and override
 # with --uri or EVOLVE_MONGODB_URI. directConnection=true is required from the host.
@@ -90,7 +90,7 @@ def main(argv=None) -> int:
     p.add_argument("--uri", default=os.environ.get("EVOLVE_MONGODB_URI") or os.environ.get("MONGODB_URI") or DEFAULT_URI)
     p.add_argument("--db", default=os.environ.get("MONGODB_DATABASE", DEFAULT_DB))
     p.add_argument("--proposer", choices=["heuristic", "llm"], default="heuristic")
-    p.add_argument("--surface", choices=["risk", "tools", "all"], default="all",
+    p.add_argument("--surface", choices=["risk", "tools", "limits", "all"], default="all",
                    help="which harness surface a cycle may change (both are always evaluated and gated)")
     p.add_argument("--dry-run", action="store_true",
                    help="with `cycle --proposer llm`: print the prompt and a token estimate, make no call, exit")
@@ -160,8 +160,10 @@ def _run(p, a, rest) -> int:
             proposer = HeuristicProposer()
         elif a.surface == "tools":
             proposer = ToolHeuristicProposer()
+        elif a.surface == "limits":
+            proposer = LimitsHeuristicProposer()
         else:
-            proposer = CompositeProposer([HeuristicProposer(), ToolHeuristicProposer()])
+            proposer = CompositeProposer([HeuristicProposer(), ToolHeuristicProposer(), LimitsHeuristicProposer()])
         out = run_cycle(store, proposer, auto_activate_low_risk=a.auto_activate_low_risk, surface=a.surface)
     elif a.command == "status":
         out = []

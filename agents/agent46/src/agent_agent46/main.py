@@ -1202,11 +1202,17 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
         from langchain_core.messages import HumanMessage
 
         messages = state["messages"]
-        if tool_limits.llm_steps_this_turn(messages) >= tool_limits.MAX_LLM_STEPS_PER_TURN:
+        harness_version, manifest = load_active_manifest(config_store)
+        max_steps, max_calls = tool_limits.resolve_limits(manifest)
+        if tool_limits.llm_steps_this_turn(messages) >= max_steps:
             from langchain_core.messages import AIMessage as _AIMessage
 
             logger.warning("LLM step cap reached for this turn; handing off to a human")
-            observability.step_cap_hit()
+            trace = tool_limits.trace_from_messages(messages)
+            observability.step_cap_hit(
+                steps=trace["llm_steps"], calls=trace["tool_calls"], limit=max_steps,
+                harness_version=harness_version,
+            )
             return {
                 "messages": [
                     _AIMessage(
@@ -1243,7 +1249,6 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
                 logger.info("No memory context available")
 
         # Build system prompt, optionally including memory context and user ID
-        harness_version, manifest = load_active_manifest(config_store)
         logger.info(f"Harness manifest version: {harness_version}")
         system_prompt = render_system_prompt(SYSTEM_PROMPT, manifest)
 
@@ -1326,6 +1331,7 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
             intent_of=lambda history: resolve_allowed(
                 load_active_manifest(config_store)[1], history
             )[0],
+            get_harness=lambda: load_active_manifest(config_store),
         ),
     )
     builder.add_edge(START, "agent")

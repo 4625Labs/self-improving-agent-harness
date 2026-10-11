@@ -147,7 +147,7 @@ def test_limit_telemetry(ran, monkeypatch):
     from agent_agent46 import observability
 
     seen = []
-    monkeypatch.setattr(observability, "tool_limit_hit", lambda rule, tool: seen.append((rule, tool)))
+    monkeypatch.setattr(observability, "tool_limit_hit", lambda rule, tool, **kw: seen.append((rule, tool)))
     make_graph(ran).invoke({"messages": [HumanMessage(content="hi"), ai(("safe", {"x": "9" * 6000}, "a"))]})
     assert seen == [(tl.RULE_ARGS, "safe")]
 

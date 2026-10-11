@@ -5,11 +5,12 @@ from typing import Any
 
 from agent_agent46.harness_config import HarnessConfigStore
 from evals.run_eval import compare, evaluate_all
+from evals.limits_eval import compare_limits, evaluate_limits_all
 from evals.tool_eval import compare_tools, evaluate_tools_all
 
 from .audit import run_confirmed
 from .patch import PatchError, apply_patch, classify_risk
-from .proposer import RISK_OPS, SURFACES, TOOL_OPS
+from .proposer import LIMIT_OPS, RISK_OPS, SURFACES, TOOL_OPS
 
 
 def _summary(res: dict) -> dict:
@@ -23,13 +24,15 @@ def record_scores(store: HarnessConfigStore, version: int, scores: dict[str, Any
     store._collection.update_one({"version": version}, {"$set": {"scores": scores}})
 
 
-def _collect_proposals(proposer, surface: str, manifest: dict, risk_dev: dict, tools_dev: dict) -> dict:
+def _collect_proposals(proposer, surface: str, manifest: dict, risk_dev: dict, tools_dev: dict,
+                       limits_dev: dict | None = None) -> dict:
     """Call each member proposer with DEV data of its own surface only (never heldout).
 
     A proposer with no `surface` is treated as a risk proposer. Ops outside the requested
     surface are dropped, so `--surface tools` can never change the risk settings.
     """
-    allowed = {"risk": RISK_OPS, "tools": TOOL_OPS, "all": RISK_OPS + TOOL_OPS}[surface]
+    allowed = {"risk": RISK_OPS, "tools": TOOL_OPS, "limits": LIMIT_OPS, "all": RISK_OPS + TOOL_OPS + LIMIT_OPS}[surface]
+    limits_dev = limits_dev or {"failures": []}
     ops: list[dict[str, Any]] = []
     notes: list[str] = []
     for m in getattr(proposer, "members", [proposer]):
@@ -38,9 +41,12 @@ def _collect_proposals(proposer, surface: str, manifest: dict, risk_dev: dict, t
             continue
         if ms == "tools":
             out = m.propose(copy.deepcopy(manifest), copy.deepcopy(tools_dev["failures"]), _summary(tools_dev))
+        elif ms == "limits":
+            out = m.propose(copy.deepcopy(manifest), copy.deepcopy(limits_dev["failures"]), _summary(limits_dev))
         elif ms == "all":
             out = m.propose(copy.deepcopy(manifest), copy.deepcopy(risk_dev["failures"]), _summary(risk_dev),
-                            tool_failures=copy.deepcopy(tools_dev["failures"]))
+                            tool_failures=copy.deepcopy(tools_dev["failures"]),
+                            limits_failures=copy.deepcopy(limits_dev["failures"]))
         else:
             out = m.propose(copy.deepcopy(manifest), copy.deepcopy(risk_dev["failures"]), _summary(risk_dev))
         ops += [o for o in out["ops"] if o.get("op") in allowed or surface == "all"]
@@ -56,12 +62,16 @@ def _untouched(surface: str, baseline: dict, result: dict) -> dict:
             "reasons": [] if same else [f"{surface} surface not patched but its results changed"]}
 
 
-def combine_gates(risk_gate: dict, tools_gate: dict) -> dict:
-    """The combined gate passes only if BOTH surface gates pass."""
+def combine_gates(risk_gate: dict, tools_gate: dict, limits_gate: dict | None = None) -> dict:
+    """The combined gate passes only if EVERY surface gate passes."""
     reasons = [f"risk: {r}" for r in risk_gate["reasons"]] + [f"tools: {r}" for r in tools_gate["reasons"]]
     passed = bool(risk_gate["passed"] and tools_gate["passed"])
-    return {"gate": "pass" if passed else "fail", "passed": passed, "reasons": reasons,
-            "risk": risk_gate["gate"], "tools": tools_gate["gate"]}
+    out = {"risk": risk_gate["gate"], "tools": tools_gate["gate"]}
+    if limits_gate is not None:
+        reasons += [f"limits: {r}" for r in limits_gate["reasons"]]
+        passed = passed and bool(limits_gate["passed"])
+        out["limits"] = limits_gate["gate"]
+    return {"gate": "pass" if passed else "fail", "passed": passed, "reasons": reasons, **out}
 
 
 def run_cycle(store: HarnessConfigStore, proposer, auto_activate_low_risk: bool = False, surface: str = "all") -> dict:
@@ -73,12 +83,15 @@ def run_cycle(store: HarnessConfigStore, proposer, auto_activate_low_risk: bool 
     base_manifest, parent = active["manifest"], active["version"]  # may lack tool_access: means baseline
     baseline = evaluate_all(base_manifest)
     tools_baseline = evaluate_tools_all(base_manifest)
-    proposal = _collect_proposals(proposer, surface, base_manifest, baseline["dev"], tools_baseline["dev"])
+    limits_baseline = evaluate_limits_all(base_manifest)  # may lack limits: means baseline
+    proposal = _collect_proposals(proposer, surface, base_manifest, baseline["dev"], tools_baseline["dev"],
+                                  limits_baseline["dev"])
     ops, rationale = proposal["ops"], proposal["rationale"]
     report: dict[str, Any] = {
         "parent": parent, "proposer": proposer.name, "surface": surface, "ops": ops, "rationale": rationale,
         "baseline": {s: _summary(r) for s, r in baseline.items()},
         "tools_baseline": {s: _summary(r) for s, r in tools_baseline.items()},
+        "limits_baseline": {s: _summary(r) for s, r in limits_baseline.items()},
     }
     if not ops:
         return report | {"version": None, "status": "no_change", "gate": None, "risk": None}
@@ -89,24 +102,30 @@ def run_cycle(store: HarnessConfigStore, proposer, auto_activate_low_risk: bool 
         # Invariant-breaking or malformed patches never reach the store.
         return report | {"version": None, "status": "rejected", "risk": None, "error": str(e),
                          "gate": {"gate": "fail", "passed": False, "reasons": [f"patch rejected: {e}"]}}
-    risk = classify_risk(ops)
+    risk = classify_risk(ops, base_manifest)  # raising a limit is never low risk
     version = store.propose(candidate, parent=parent, reason=rationale, author=f"proposer:{proposer.name}")
     result = evaluate_all(candidate)
     tools_result = evaluate_tools_all(candidate)
+    limits_result = evaluate_limits_all(candidate)
     # A surface the patch did not touch cannot have changed, so its gate is not re-litigated:
     # compare() fails on ANY critical violation, including ones the baseline already has, which
     # would block every patch to the other surface. Both surfaces are still evaluated and stored.
     risk_touched = any(o["op"] in RISK_OPS for o in ops)
     tools_touched = any(o["op"] in TOOL_OPS for o in ops)
+    limits_touched = any(o["op"] in LIMIT_OPS for o in ops)
     risk_gate = compare(baseline, result) if risk_touched else _untouched("risk", baseline, result)
     tools_gate = compare_tools(tools_baseline, tools_result) if tools_touched else _untouched("tools", tools_baseline, tools_result)
-    gate = combine_gates(risk_gate, tools_gate)
+    limits_gate = (compare_limits(limits_baseline, limits_result) if limits_touched
+                   else _untouched("limits", limits_baseline, limits_result))
+    gate = combine_gates(risk_gate, tools_gate, limits_gate)
     record_scores(store, version, {
         "baseline": {s: _summary(r) for s, r in baseline.items()},
         "candidate": {s: _summary(r) for s, r in result.items()},
         "tools_baseline": {s: _summary(r) for s, r in tools_baseline.items()},
         "tools_candidate": {s: _summary(r) for s, r in tools_result.items()},
-        "risk_gate": risk_gate, "tools_gate": tools_gate,
+        "limits_baseline": {s: _summary(r) for s, r in limits_baseline.items()},
+        "limits_candidate": {s: _summary(r) for s, r in limits_result.items()},
+        "risk_gate": risk_gate, "tools_gate": tools_gate, "limits_gate": limits_gate,
         "gate": gate, "risk": risk,
     })
     if not gate["passed"]:
@@ -119,9 +138,10 @@ def run_cycle(store: HarnessConfigStore, proposer, auto_activate_low_risk: bool 
         status = "candidate"
     return report | {
         "version": version, "status": status, "risk": risk, "gate": gate,
-        "risk_gate": risk_gate, "tools_gate": tools_gate,
+        "risk_gate": risk_gate, "tools_gate": tools_gate, "limits_gate": limits_gate,
         "candidate": {s: _summary(r) for s, r in result.items()},
         "tools_candidate": {s: _summary(r) for s, r in tools_result.items()},
+        "limits_candidate": {s: _summary(r) for s, r in limits_result.items()},
     }
 
 

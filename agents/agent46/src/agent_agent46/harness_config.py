@@ -21,6 +21,7 @@ from pymongo import MongoClient
 
 from agent_agent46 import observability
 from agent_agent46.tool_access import baseline_tool_access, validate_tool_access
+from agent_agent46.tool_limits import baseline_limits, validate_limits
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,8 @@ DEFAULT_MANIFEST: dict[str, Any] = {
     },
     # Per-intent tool allow-lists. Baseline allows everything; see tool_access.py for the limits.
     "tool_access": baseline_tool_access(),
+    # Runaway-protection limits (see tool_limits.py); bounds in INVARIANTS["limits_bounds"].
+    "limits": baseline_limits(),
 }
 
 # Hard limits a manifest must satisfy, owned by humans. Thresholds can tighten freely but
@@ -53,6 +56,10 @@ INVARIANTS: dict[str, Any] = {
     "max_rule_chars": 300,
     "max_keywords_per_level": 25,
     "keyword_chars": (4, 40),  # min/max length; letters, digits, space, hyphen only
+    "limits_bounds": {  # inclusive (min, max); ints only
+        "max_llm_steps_per_turn": (4, 20),
+        "max_tool_calls_per_turn": (6, 30),
+    },
     "bounds": {
         "auto_approve_limit": (0, 1000),
         "medium_amount": (1000, 10000),
@@ -69,13 +76,17 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
 
     # Only these fields are evolvable. Anything else (e.g. memory label settings) is rejected so
     # a proposer cannot smuggle new behavior into the manifest.
-    unknown = set(manifest) - {"rules", "thresholds", "keywords", "tool_access"}
+    unknown = set(manifest) - {"rules", "thresholds", "keywords", "tool_access", "limits"}
     if unknown:
         errors.append(f"unknown manifest fields: {sorted(unknown)}")
 
     # Older manifests have no tool_access and mean "baseline", so it is optional.
     if "tool_access" in manifest:
         errors.extend(validate_tool_access(manifest["tool_access"]))
+
+    # Older manifests have no limits and mean "baseline", so it is optional.
+    if "limits" in manifest:
+        errors.extend(validate_limits(manifest["limits"], INVARIANTS["limits_bounds"]))
 
     rules = manifest.get("rules")
     if not isinstance(rules, list):

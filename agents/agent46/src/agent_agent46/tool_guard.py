@@ -113,7 +113,10 @@ def _limit_denial(call: dict[str, Any]) -> ToolMessage:
 
 
 def _limit_refusals(
-    history: list[BaseMessage], calls: list[dict[str, Any]], skip_ids: set[str]
+    history: list[BaseMessage],
+    calls: list[dict[str, Any]],
+    skip_ids: set[str],
+    limits: Optional[tuple[int, int]] = None,
 ) -> dict[str, str]:
     """Map call id -> rule for calls refused by tool_limits. Fails OPEN if check_call raises."""
     refused: dict[str, str] = {}
@@ -123,7 +126,7 @@ def _limit_refusals(
             continue
         try:
             reason = tool_limits.check_call(
-                [*history, AIMessage(content="", tool_calls=accepted)], c
+                [*history, AIMessage(content="", tool_calls=accepted)], c, limits
             )
         except Exception:
             logger.error("Tool limit check failed; failing open", exc_info=True)
@@ -140,6 +143,7 @@ def guarded_tool_node(
     get_allowed: Callable[[list[BaseMessage]], Iterable[str]],
     *,
     intent_of: Callable[[list[BaseMessage]], Optional[str]] | None = None,
+    get_harness: Callable[[], tuple[Any, dict[str, Any]]] | None = None,
 ) -> Callable[..., Any]:
     """Wrap a ToolNode so calls to non-allowed tools are denied instead of executed.
 
@@ -149,6 +153,9 @@ def guarded_tool_node(
 
     Optional intent_of (same history argument) only labels the tool_denied telemetry event. It is
     called only when a call is denied, and its failures are ignored.
+
+    Optional get_harness returns (harness_version, manifest); the manifest's evolvable limits are
+    read through tool_limits.resolve_limits (which never raises). Without it the baseline applies.
     """
 
     def node(state: dict[str, Any], config: RunnableConfig | None = None) -> Any:
@@ -160,13 +167,28 @@ def guarded_tool_node(
         allowed = frozenset(get_allowed(messages[:-1]))
         calls = list(last.tool_calls)
         denied_ids = {c["id"] for c in calls if c.get("name") not in allowed}
-        limit_rules = _limit_refusals(messages[:-1], calls, denied_ids)
+        harness_version: Any = None
+        limits: Optional[tuple[int, int]] = None
+        if get_harness is not None:
+            try:
+                harness_version, harness_manifest = get_harness()
+                limits = tool_limits.resolve_limits(harness_manifest)
+            except Exception:
+                logger.error("Could not load limits for the tool guard; using baseline", exc_info=True)
+        limit_rules = _limit_refusals(messages[:-1], calls, denied_ids, limits)
         if not denied_ids and not limit_rules:
             return tool_node.invoke(state, config)
+        if limit_rules:
+            trace = tool_limits.trace_from_messages(messages)
         for c in calls:
             if c["id"] in limit_rules:
-                logger.warning(f"Refused call to {c.get('name')}: limit {limit_rules[c['id']]}")
-                observability.tool_limit_hit(limit_rules[c["id"]], c.get("name"))
+                rule = limit_rules[c["id"]]
+                logger.warning(f"Refused call to {c.get('name')}: limit {rule}")
+                cap = (limits[1] if limits else tool_limits.MAX_TOOL_CALLS_PER_TURN) if rule == tool_limits.RULE_TURN else None
+                observability.tool_limit_hit(
+                    rule, c.get("name"), steps=trace["llm_steps"], calls=trace["tool_calls"],
+                    limit=cap, harness_version=harness_version,
+                )
         refused_ids = denied_ids | set(limit_rules)
 
         intent: Optional[str] = None

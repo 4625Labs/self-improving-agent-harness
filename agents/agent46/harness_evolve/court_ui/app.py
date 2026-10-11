@@ -20,6 +20,7 @@ from markupsafe import Markup  # noqa: E402
 
 from evals.run_eval import evaluate  # noqa: E402
 from evals.tool_eval import evaluate_tools  # noqa: E402
+from agent_agent46.policy_store import CLAIMS_COLLECTION  # noqa: E402
 from harness_evolve.court import VALID_RECOMMENDATIONS, CourtDocket  # noqa: E402
 from harness_evolve.loop import approve, rollback, run_cycle  # noqa: E402
 from harness_evolve.proposer import (  # noqa: E402
@@ -33,7 +34,7 @@ DEFAULT_URI = "mongodb://localhost:53087/?directConnection=true"
 DEFAULT_DB = "agent_agent46_local"
 
 TEMPLATE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Court docket</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Court docket</title>
 <style>
 body{font:14px/1.45 system-ui,sans-serif;margin:0;background:#f5f5f2;color:#222}
 header{background:#1d2b3a;color:#fff;padding:12px 20px;display:flex;gap:24px;align-items:baseline}
@@ -47,6 +48,11 @@ button{cursor:pointer;padding:4px 10px}input[type=text],select{padding:3px}
 pre{background:#f0f0ea;padding:8px;overflow:auto;white-space:pre-wrap;max-height:260px}
 table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:3px 8px;text-align:left}
 form.inline{display:inline}.panel{margin-top:14px}
+.cap{color:#555;font-size:12px;margin:-4px 0 8px}.how{background:#eef3f8;border-color:#c9d6e3;margin:0 0 14px}
+.how p{margin:4px 0}.err-inline{color:#a11;background:#f9e0e0;border-radius:4px;padding:3px 8px;margin:4px 0;font-size:13px}
+.hide{display:none}details summary{cursor:pointer;color:#245}.reason{max-width:360px;overflow-wrap:anywhere}
+.tw{overflow-x:auto;max-width:100%}.tw th,.tw td{white-space:nowrap}.tw td.reason{white-space:normal;min-width:200px}section,.panel,.case{min-width:0;overflow-wrap:anywhere}
+@media (max-width:800px){.cols{grid-template-columns:1fr}header{flex-wrap:wrap;gap:8px}main{padding:12px}}
 </style></head><body>
 <header><h1>Court docket</h1>
 <div>Active manifest <span class="ver">v{{ active.version if active else "?" }}</span></div></header>
@@ -59,16 +65,19 @@ form.inline{display:inline}.panel{margin-top:14px}
 <input type="text" name="claim_id" placeholder="claim_id" required>
 <input type="text" name="reason" placeholder="why (optional)">
 <button>Nominate claim_id</button></form></div>
+<div class="panel how"><b>How this works.</b> Raindrop signals and human reviewers nominate claims where the agent may have been wrong.
+A human adjuster rules on each case, and only convicted cases become regression test scenarios. The fixed evaluator and gate then decide
+whether a proposed harness change is safe, and a human approves it before it goes live.</div>
 <div class="cols">
-<section><h2>Nominated ({{ nominated|length }})</h2>
+<section><h2>Nominated ({{ nominated|length }})</h2><p class="cap">Flagged, not yet reviewed.</p>
 {% for c in nominated %}<div class="case"><b>{{ c.claim_id }}</b> <span class="muted">[{{ c.source }}]</span><br>
 {{ c.reason }}<br>
 <form method="post" action="/case/{{ c.case_id }}/file" class="inline">{{ tok() }}<button>File case</button></form>
-<form method="post" action="/case/{{ c.case_id }}/verdict" class="inline">{{ tok() }}
-<input type="hidden" name="action" value="dismiss"><input type="text" name="adjuster" placeholder="adjuster" required>
-<button>Dismiss</button></form></div>{% else %}<p class="muted">None.</p>{% endfor %}</section>
+<form method="post" action="/case/{{ c.case_id }}/verdict" class="inline adj" novalidate>{{ tok() }}
+<input type="hidden" name="action" value="dismiss"><input type="text" name="adjuster" placeholder="adjuster">
+<button>Dismiss</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form></div>{% else %}<p class="muted">None.</p>{% endfor %}</section>
 
-<section><h2>Filed ({{ filed|length }})</h2>
+<section><h2>Filed ({{ filed|length }})</h2><p class="cap">Case file built, awaiting adjuster verdict.</p>
 {% for c in filed %}<div class="case"><b>{{ c.claim_id }}</b> <span class="muted">case {{ c.case_id }} [{{ c.source }}]</span>
 <h3>Case file</h3>
 <table>
@@ -81,35 +90,38 @@ form.inline{display:inline}.panel{margin-top:14px}
 <tr><th>Reviewer resolution</th><td>{{ c.resolution }}</td></tr>
 <tr><th>Why nominated</th><td>{{ c.reason }}</td></tr></table>
 <h3>Verdict</h3>
-<form method="post" action="/case/{{ c.case_id }}/verdict">{{ tok() }}
-<select name="expected" required><option value="">expected...</option>
+<form method="post" action="/case/{{ c.case_id }}/verdict" class="adj" novalidate>{{ tok() }}
+<input type="hidden" name="action" value="verdict">
+<select name="expected"><option value="">expected...</option>
 {% for r in recs %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select>
 <label><input type="checkbox" name="critical" value="1"> Critical</label><br>
-<input type="text" name="adjuster" placeholder="adjuster (required)" required>
-<button name="action" value="verdict">Convict</button>
-<button name="action" value="dismiss">Dismiss</button></form></div>
+<input type="text" name="adjuster" placeholder="adjuster (required)">
+<button>Convict</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form>
+<form method="post" action="/case/{{ c.case_id }}/verdict" class="adj" novalidate style="margin-top:6px">{{ tok() }}
+<input type="hidden" name="action" value="dismiss">
+<input type="text" name="adjuster" placeholder="adjuster (required)">
+<button>Dismiss</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form></div>
 {% else %}<p class="muted">None.</p>{% endfor %}</section>
 
-<section><h2>Convicted / Dismissed ({{ closed|length }})</h2>
-{% for c in closed %}<div class="case"><b>{{ c.claim_id }}</b> {{ c.status }}
-{% if c.status == "convicted" %}: expected {{ c.expected_recommendation }}{% if c.critical %} (critical){% endif %}
+<section><h2>Convicted / Dismissed ({{ closed|length }})</h2><p class="cap">Decided.</p>
+{% for c in closed %}<div class="case"><b>{{ c.claim_id }}</b> {{ c.status }} {% if c.status == "convicted" %}: expected {{ c.expected_recommendation }}{% if c.critical %} (critical){% endif %}
 by {{ c.verdict_by }}<br><span class="muted">Scenario written: {{ c.draft.id }} to docket.json (dev split)</span>
 {% else %}by {{ c.dismissed_by }} {{ c.dismiss_note }}{% endif %}</div>
 {% else %}<p class="muted">None.</p>{% endfor %}</section>
 </div>
 
 <div class="panel"><h2>Trial (dev split, no LLM)</h2>
-<table><tr><th></th><th>version</th><th>accuracy</th><th>n</th><th>critical violations</th><th>over-esc.</th><th>under-esc.</th></tr>
-{% for label, ver, r in trial %}<tr><td>{{ label }}</td><td>{{ ver }}</td><td>{{ "%.3f"|format(r.accuracy) }}</td><td>{{ r.n }}</td>
-<td>{{ r.critical_violations }}</td><td>{{ "%.3f"|format(r.over_escalation_rate) }}</td><td>{{ "%.3f"|format(r.under_escalation_rate) }}</td></tr>{% endfor %}</table>
+<div class="tw"><table><tr><th></th><th>version</th><th>dev accuracy</th><th>held-out accuracy</th><th>dev n</th><th>critical violations</th><th>over-esc.</th><th>under-esc.</th><th>gate</th></tr>
+{% for label, ver, r, h, gate in trial %}<tr><td>{{ label }}</td><td>{{ ver }}</td><td>{{ "%.3f"|format(r.accuracy) }}</td><td>{{ "%.3f"|format(h.accuracy) }}</td><td>{{ r.n }}</td>
+<td>{{ r.critical_violations }}</td><td>{{ "%.3f"|format(r.over_escalation_rate) }}</td><td>{{ "%.3f"|format(r.under_escalation_rate) }}</td><td>{{ gate }}</td></tr>{% endfor %}</table></div>
 <h3>Run cycle</h3>
 <form method="post" action="/cycle">{{ tok() }}
 <select name="proposer"><option value="heuristic">heuristic (default)</option><option value="llm">llm (dry-run first)</option></select>
 <button>Run cycle</button></form>
 <p class="muted">The llm option only shows the prompt and a token estimate. The model is called only by the separate confirm button.</p>
 {% if dry %}<h3>LLM dry-run (no model call made)</h3>
-<p>model {{ dry.model }}, about {{ dry.estimated_prompt_tokens }} prompt tokens, max output {{ dry.max_output_tokens }}, cached {{ dry.cached }}, calls allowed {{ dry.calls_allowed }}</p>
-<pre>{{ dry.prompt }}</pre>
+<p>model {{ dry.model }}, about <b>{{ dry.estimated_prompt_tokens }} prompt tokens</b>, max output {{ dry.max_output_tokens }}, cached {{ dry.cached }}, calls allowed {{ dry.calls_allowed }}</p>
+<details><summary>Show the prompt that would be sent</summary><pre>{{ dry.prompt }}</pre></details>
 <form method="post" action="/cycle">{{ tok() }}<input type="hidden" name="proposer" value="llm">
 <button name="action" value="llm_call">Call the model</button></form>{% endif %}
 {% if report %}<h3>Candidate</h3>
@@ -123,14 +135,19 @@ by {{ c.verdict_by }}<br><span class="muted">Scenario written: {{ c.draft.id }} 
 <form method="post" action="/version/{{ report.version }}/approve" class="inline">{{ tok() }}<button>Approve</button></form>
 <form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<button>Reject</button></form>{% endif %}{% endif %}
 <h3>Versions</h3>
-<table><tr><th>v</th><th>status</th><th>author</th><th>reason</th><th></th></tr>
-{% for v in versions %}<tr><td>{{ v.version }}</td><td>{{ v.status }}</td><td>{{ v.author }}</td><td>{{ v.reason }}</td>
-<td>{% if v.status == "retired" %}<form method="post" action="/version/{{ v.version }}/rollback" class="inline">{{ tok() }}<button>Rollback to</button></form>{% endif %}</td></tr>{% endfor %}</table>
-</div></main></body></html>"""
+<div class="tw"><table><tr><th>v</th><th>status</th><th>author</th><th>reason</th><th></th></tr>
+{% for v in versions %}<tr><td>{{ v.version }}</td><td>{{ v.status }}</td><td>{{ v.author }}</td><td class="reason">{% set rs = v.reason or "" %}{% if rs|length > 120 %}<details><summary>{{ rs[:120] }}...</summary>{{ rs }}</details>{% else %}{{ rs }}{% endif %}</td>
+<td>{% if v.status == "retired" %}<form method="post" action="/version/{{ v.version }}/rollback" class="inline">{{ tok() }}<button>Rollback to</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
+</div>
+<script>
+document.querySelectorAll("form.adj").forEach(function(f){f.addEventListener("submit",function(e){
+var a=f.querySelector("[name=adjuster]"),m=f.querySelector(".err-inline");
+if(!a.value.trim()){e.preventDefault();m.classList.remove("hide");a.focus();}else{m.classList.add("hide");}});});
+</script></main></body></html>"""
 
 
 def _fmt_report(rep: dict) -> dict:
-    out = {k: rep.get(k) for k in ("proposer", "status", "version", "risk", "rationale", "gate", "error")}
+    out = {k: rep.get(k) for k in ("proposer", "status", "version", "risk", "rationale", "gate", "error", "candidate")}
     out["ops_json"] = json.dumps(rep.get("ops", []), indent=1)
     return out
 
@@ -174,8 +191,14 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
         trial = []
         if active:
             from agent_agent46.harness_config import DEFAULT_MANIFEST
-            trial = [("baseline", "-", evaluate(DEFAULT_MANIFEST, "dev")),
-                     ("active", f"v{active['version']}", evaluate(active["manifest"], "dev"))]
+            trial = [("baseline", "-", evaluate(DEFAULT_MANIFEST, "dev"), evaluate(DEFAULT_MANIFEST, "heldout"), "-"),
+                     ("active", f"v{active['version']}", evaluate(active["manifest"], "dev"),
+                      evaluate(active["manifest"], "heldout"), "-")]
+            rep_ = state["report"]
+            if rep_ and rep_.get("version") and (rep_.get("candidate") or {}).get("dev"):
+                cand = rep_["candidate"]
+                gate = (rep_.get("gate") or {}).get("gate", "-")
+                trial.append((f"candidate ({rep_['status']})", f"v{rep_['version']}", cand["dev"], cand["heldout"], gate))
         flashes, state["flashes"] = state["flashes"], []
         return env.get_template("index.html").render(
             active=active, flashes=flashes, trial=trial, versions=store.list_versions(),
@@ -195,6 +218,8 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
         cid = f.get("claim_id", "").strip()
         if not cid:
             return flash("err", "claim_id is required")
+        if not db[CLAIMS_COLLECTION].find_one({"claim_id": cid.upper()}):
+            return flash("err", f"claim not found: {cid.upper()}; nothing was nominated")
         return guarded(lambda: f"nominated {court.nominate(cid, 'manual', f.get('reason', ''))['claim_id']}")
 
     @app.post("/case/{case_id}/file")

@@ -153,3 +153,32 @@ def test_heuristic_cycle_and_approve_reject(tmp_path):
     assert calls == [] and "cycle finished" in html
     assert "Approve" in html or "no_change" in html
     assert "not a candidate" in _post(c, "/version/1/reject").text
+
+
+def test_nominate_unknown_claim_rejected(tmp_path):
+    c, _ = _make(tmp_path)
+    html = _post(c, "/nominate", claim_id="NOPE", reason="x").text
+    assert "claim not found: NOPE" in html
+    assert "<b>NOPE</b>" not in html
+    assert "<b>CLM1</b>" in _post(c, "/nominate", claim_id="clm1").text
+
+
+def test_dismiss_filed_case_needs_only_adjuster_and_forms_separate(tmp_path):
+    c, _ = _make(tmp_path)
+    _post(c, "/scan")
+    cid = _case_id(c)
+    html = _post(c, f"/case/{cid}/file").text
+    # Dismiss lives in its own form, and no field is natively `required` (in-page error instead).
+    assert 'name="adjuster" placeholder="adjuster (required)" required' not in html and 'placeholder="adjuster" required' not in html and "Adjuster name is required." in html
+    assert html.count(f'action="/case/{cid}/verdict"') == 2
+    assert "adjuster name is required" in _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="").text
+    assert "dismissed case" in _post(c, f"/case/{cid}/verdict", action="dismiss", adjuster="Ann").text
+    assert not (tmp_path / "docket.json").exists()
+
+
+def test_trial_shows_candidate_row_after_cycle(tmp_path):
+    c, _ = _make(tmp_path)
+    assert "candidate (" not in c.get("/").text
+    html = _post(c, "/cycle", proposer="heuristic").text
+    assert "candidate (" in html and "held-out accuracy" in html
+    assert "viewport" in html and "convicted:" not in html

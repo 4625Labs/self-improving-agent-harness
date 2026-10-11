@@ -671,6 +671,23 @@ its own port: `court_ui --allow-remote --db <db> --port 8766`. Played once on 20
 produced candidate v7 (`add_keyword staged`, low risk, gate pass), the operator approved it, and the
 audit log reads `demo.simulated_verdict`, `demo.run`, `manifest.approve`.
 
+### Full run of show, rehearsed on Atlas (2026-10-11)
+
+1. Raindrop: the cloud agent's events carry `harness_version`.
+2. Court on Atlas: 3 Nominated and 2 Filed cases, all real misses under the live policy (the seed adapts).
+3. The operator ruled on `CLM-SIM-02` (cloned VIN) as adjuster: `manual_review_required`, critical. Audited.
+4. `demo run --scenario cloned-vehicle`: the run used the operator's ruling, simulated one verdict, and
+   proposed v8 (`add_keyword cloned`, low risk, gate pass, dangerous misses 1 to 0).
+5. The operator approved v8 in the browser. Atlas: v8 active, v1 to v7 retired (v4 rejected).
+6. Cloud chat, same kind of claim: `CLM-79033`, `harness_version` 8, `manual_review_required`, then denied.
+   The previous run of the idea (`CLM-75222`, staged collision) is `harness_version` 7.
+7. `demo run --scenario abandoned-lookalike`: v9 `add_keyword abandoned` was **rejected by the gate**
+   (accuracy 0.829 to 0.771, unneeded reviews 0.231 to 0.462). Nothing to approve; v8 stayed live.
+8. Guardrails in the cloud: an injection message is denied before the agent runs, an SSN-like number in a
+   reply is replaced.
+Audit trail in Atlas at the end: 28 rows, 4 by the human operator (the sync, two approvals, one verdict)
+and 14 by the labelled simulated adjuster.
+
 ### Cloud proof
 
 The deployed agent logged `Harness manifest version: 7` and `Tool access: intent=claims, offered 14/17

@@ -134,6 +134,10 @@ UI_LABELS: dict[str, Any] = {
     "intents": {"quote": "quote requests", "claims": "claims", "info": "information questions",
                 "general": "general questions"},
     "limits": {"max_llm_steps_per_turn": "model steps per turn", "max_tool_calls_per_turn": "tool calls per turn"},
+    "heldout_line": "Accuracy on unseen cases {old} to {new}, dangerous misses {c_old} to {c_new}",
+    "past_changes": "What changed",
+    "no_summary": "A plain-English summary is not available for this version; see the note in the table.",
+    "impact_reasons_stored": "Safety check reasons",
     "critical_badge": "critical",
     "tip_critical_badge": "must never be auto-approved",
 }
@@ -243,6 +247,92 @@ def describe_ops(ops: Any, manifest: dict[str, Any] | None = None) -> list[dict[
     return sorted(out, key=lambda d: order.index(d["group"]))  # stable: keeps op order within a group
 
 
+def ops_from_manifests(parent_manifest: dict[str, Any], child_manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reconstruct the whitelisted patch ops that turn `parent_manifest` into `child_manifest`.
+
+    Pure and deterministic. Order: rules (remove, then add), keywords (high, medium), thresholds
+    (sorted by name), tools (per intent: disable then enable, tools sorted), limits. A missing
+    tool_access or limits key means baseline. Raises ValueError when the difference cannot be
+    expressed as ops (non-dict manifests, a removed keyword, a threshold that did not exist).
+    Applying the result with patch.apply_patch to the parent yields the child.
+    """
+    from agent_agent46.tool_access import INTENTS, baseline_tool_access
+    from agent_agent46.tool_limits import LIMIT_NAMES, baseline_limits
+    if not isinstance(parent_manifest, dict) or not isinstance(child_manifest, dict):
+        raise ValueError("manifest must be a dict")
+    p, c = parent_manifest, child_manifest
+    ops: list[dict[str, Any]] = []
+    try:
+        p_rules = {r["id"]: r["text"] for r in p.get("rules", [])}
+        c_rules = {r["id"]: r["text"] for r in c.get("rules", [])}
+        changed = {i for i in p_rules if i in c_rules and p_rules[i] != c_rules[i]}
+        ops += [{"op": "remove_rule", "id": i} for i in sorted((set(p_rules) - set(c_rules)) | changed)]
+        for r in c.get("rules", []):  # additions keep the child's order
+            if r["id"] not in p_rules or r["id"] in changed:
+                ops.append({"op": "add_rule", "id": r["id"], "text": r["text"]})
+        for level in ("high", "medium"):
+            old = [str(k) for k in p.get("keywords", {}).get(level, [])]
+            new = [str(k) for k in c.get("keywords", {}).get(level, [])]
+            if {k.lower() for k in old} - {k.lower() for k in new}:
+                raise ValueError(f"keyword removed from {level}; not expressible as ops")
+            have = {k.lower() for k in old}
+            for k in new:
+                if k.lower() not in have:
+                    have.add(k.lower())
+                    ops.append({"op": "add_keyword", "level": level, "keyword": k})
+        pt, ct = p.get("thresholds", {}), c.get("thresholds", {})
+        if set(pt) != set(ct):
+            raise ValueError("threshold names differ; not expressible as ops")
+        ops += [{"op": "set_threshold", "name": n, "value": ct[n]} for n in sorted(ct) if ct[n] != pt[n]]
+        pa = (p.get("tool_access") or baseline_tool_access())["intents"]
+        ca = (c.get("tool_access") or baseline_tool_access())["intents"]
+        for intent in INTENTS:
+            before, after = set(pa[intent]["allow"]), set(ca[intent]["allow"])
+            ops += [{"op": "disable_tool", "intent": intent, "tool": t} for t in sorted(before - after)]
+            ops += [{"op": "enable_tool", "intent": intent, "tool": t} for t in sorted(after - before)]
+        pl = {**baseline_limits(), **(p.get("limits") or {})}
+        cl = {**baseline_limits(), **(c.get("limits") or {})}
+        ops += [{"op": "set_limit", "name": n, "value": cl[n]} for n in LIMIT_NAMES if cl[n] != pl[n]]
+    except (KeyError, TypeError, AttributeError) as e:
+        raise ValueError(f"cannot diff manifests: {e!r}") from e
+    return ops
+
+
+def _version_view(v: dict[str, Any], by_num: dict[Any, dict[str, Any]], parent_default: dict[str, Any] | None) -> dict[str, Any]:
+    """Display-only fields for one policy version row/card. Never raises."""
+    out: dict[str, Any] = {"changes": None, "impact": None, "gate": None, "reasons": [], "risk": None}
+    try:
+        scores = v.get("scores") if isinstance(v.get("scores"), dict) else {}
+        gate = scores.get("gate") if isinstance(scores.get("gate"), dict) else {}
+        out["gate"] = gate
+        out["reasons"] = [str(r) for r in gate.get("reasons") or []]
+        out["risk"] = scores.get("risk")
+        parent = by_num.get(v.get("parent"))
+        pm = parent.get("manifest") if parent else parent_default
+        if isinstance(pm, dict) and parent:
+            ops = ops_from_manifests(pm, v.get("manifest"))
+            out["changes"] = describe_ops(ops, pm)
+            if out["risk"] not in ("low", "needs_approval"):
+                from harness_evolve.patch import classify_risk
+                out["risk"] = classify_risk(ops, pm)
+            out["ops_json"] = json.dumps(ops, indent=1)
+        b, cnd = scores.get("baseline") or {}, scores.get("candidate") or {}
+        if (b.get("dev") or {}).get("accuracy") is not None and (cnd.get("dev") or {}).get("accuracy") is not None:
+            ho = (b.get("heldout") or {}), (cnd.get("heldout") or {})
+            out["impact"] = {"old": _pct(b["dev"]["accuracy"]), "new": _pct(cnd["dev"]["accuracy"]),
+                             "c_old": b["dev"].get("critical_violations", "-"), "c_new": cnd["dev"].get("critical_violations", "-"),
+                             "passed": gate.get("gate") == "pass" if gate.get("gate") in ("pass", "fail") else bool(gate.get("passed")),
+                             "ho": {"old": _pct(ho[0].get("accuracy")), "new": _pct(ho[1].get("accuracy")),
+                                    "c_old": ho[0].get("critical_violations", "-"), "c_new": ho[1].get("critical_violations", "-")}
+                             if ho[0].get("accuracy") is not None and ho[1].get("accuracy") is not None else None}
+    except Exception:  # noqa: BLE001 - display only: fall back to the plain reason text
+        out["changes"], out["impact"] = None, out["impact"] if isinstance(out.get("impact"), dict) else None
+    out.setdefault("ops_json", "[]")
+    out.update({"version": v.get("version"), "status": v.get("status"), "author_label": _author_label(str(v.get("author") or "")),
+                "points": _rationale_points(v.get("reason")), "error": None})
+    return out
+
+
 def _rationale_points(text: Any, limit: int = 8, width: int = 220) -> list[str]:
     parts = [p.strip() for p in str(text or "").replace("\n", "; ").split("; ") if p.strip()]
     pts = [_clip(p, width) for p in parts[:limit]]
@@ -311,6 +401,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 div.panel>details>summary{font-weight:700;font-size:15px;color:#222;padding-right:34px}
 div.panel>details[open]>summary{margin-bottom:8px}
 #trial .tw th:nth-child(2){white-space:nowrap;min-width:84px}.tw{-webkit-overflow-scrolling:touch}
+
+.pcard{max-width:100%;box-sizing:border-box}.pcard .acts form{display:flex;flex-wrap:wrap;gap:6px;align-items:center;max-width:100%}.pcard .acts input[type=text]{max-width:140px}.pcard .badge,.pcard .confirm,.pcard pre{white-space:normal;overflow-wrap:anywhere}
 .pcard{border:1px solid #c9d6e3;background:#fbfcfe;border-radius:6px;padding:10px 12px;margin-top:10px}
 .pch{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}.pch h3{margin:0 6px 0 0;font-size:15px}.pcard h4{margin:10px 0 2px;font-size:13px}
 .pcard ul{margin:2px 0 6px;padding-left:20px}.cg{margin:4px 0}.b-warn{background:#ffe3a3;color:#6b4300;border:1px solid #e0a800}
@@ -477,31 +569,37 @@ whether a proposed harness change is safe, and a human approves it before it goe
 <details><summary>{{ L.dry_prompt }}</summary><pre>{{ dry.prompt }}</pre></details>
 <form method="post" action="/cycle">{{ tok() }}<input type="hidden" name="proposer" value="llm">
 <button name="action" value="llm_call">{{ L.ask_llm }}</button></form>{% endif %}
-{% if report %}<div class="pcard" id="proposed">
+{% macro pcard(report, anchor) %}<div class="pcard"{% if anchor %} id="proposed"{% endif %}>
 <div class="pch"><h3>{{ L.card_title.format(version=report.version) if report.version else L.proposed_title }}</h3>
 <span class="badge b-active">{{ report.author_label }}</span>
 <span class="badge b-{{ report.status }}">{{ L.status.get(report.status, report.status) }}</span>
 <span class="badge {{ 'b-active' if report.risk == 'low' else 'b-candidate' }}">{{ L.risk_low if report.risk == 'low' else L.risk_needs_approval }}</span></div>
 <h4>{{ L.what_changes }}</h4>
-{% if report.changes %}{% for grp, items in report.changes|groupby("group") %}<div class="cg"><b>{{ grp }}</b><ul>
+{% if report.changes is none %}<p class="muted">{{ L.no_summary }}</p>{% elif report.changes %}{% for grp, items in report.changes|groupby("group") %}<div class="cg"><b>{{ grp }}</b><ul>
 {% for it in items %}<li>{{ it.text }}{% if it.risk == "loosens" %} <span class="badge b-warn">{{ L.loosens }}</span>{% endif %}
 {% if it.tools %}<details><summary>{{ L.show_tools }}</summary>{{ it.tools|join(", ") }}</details>{% endif %}</li>{% endfor %}</ul></div>{% endfor %}
 {% else %}<p class="muted">{{ L.no_changes }}</p>{% endif %}
 {% if report.impact %}<p class="impact"><b>{{ L.impact_title }}:</b> {{ L.impact_line.format(old=report.impact.old, new=report.impact.new, c_old=report.impact.c_old, c_new=report.impact.c_new) }}
-<span class="badge {{ 'b-active' if report.impact.passed else 'b-rejected' }}">{{ L.gate_pass if report.impact.passed else L.gate_fail }}</span></p>{% endif %}
+<span class="badge {{ 'b-active' if report.impact.passed else 'b-rejected' }}">{{ L.gate_pass if report.impact.passed else L.gate_fail }}</span>
+{% if report.impact.ho %}<br>{{ L.heldout_line.format(old=report.impact.ho.old, new=report.impact.ho.new, c_old=report.impact.ho.c_old, c_new=report.impact.ho.c_new) }}{% endif %}</p>{% endif %}
 {% if report.gate and report.gate.gate != "pass" and report.gate.reasons %}<p><b>{{ L.impact_reasons }}</b></p><ul>{% for r in report.gate.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
 <details><summary>{{ L.show_evidence }}</summary>{% if report.points %}<ul>{% for p in report.points %}<li>{{ p }}</li>{% endfor %}</ul>{% else %}<p class="muted">{{ L.no_evidence }}</p>{% endif %}</details>
 <details><summary>{{ L.tech_details }}</summary><pre>{{ report.ops_json }}</pre></details>
 {% if report.error %}<p class="err flash">{{ report.error }}</p>{% endif %}
 {% if report.status == "candidate" %}<div class="acts">
 <form method="post" action="/version/{{ report.version }}/approve" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.approve }}</button></form>
-<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.reject }}</button></form></div>{% endif %}</div>{% endif %}
+<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.reject }}</button></form></div>{% endif %}</div>{% endmacro %}
+{% if report %}{{ pcard(report, true) }}{% endif %}
 </details></div>
 
 <div class="panel pos" id="versions">{{ tip("tip-ver", "About " ~ L.versions, "Every policy version: " ~ L.status.active ~ " is running now, " ~ L.status.retired ~ " can be made live again, " ~ L.status.candidate ~ " needs a human decision, " ~ L.status.rejected ~ " was declined.") }}<details><summary>{{ L.versions }} ({{ versions|length }})</summary>
 <div class="tw"><table><tr><th>{{ L.ver_col_version }}</th><th>{{ L.ver_col_status }}</th><th>{{ L.ver_col_author }}</th><th>{{ L.ver_col_reason }}</th><th>{{ L.ver_col_actions }}</th></tr>
-{% for v in versions %}<tr><td>{{ v.version }}</td><td><span class="badge b-{{ v.status }}">{{ L.status.get(v.status, v.status) }}</span></td><td>{{ v.author|author }}</td><td class="reason">{% set rs = v.reason or "" %}{% if rs|length > 120 %}<details><summary>{{ rs[:120] }}...</summary>{{ rs }}</details>{% else %}{{ rs }}{% endif %}</td>
+{% for v in versions %}<tr><td>{{ v.version }}</td><td><span class="badge b-{{ v.status }}">{{ L.status.get(v.status, v.status) }}</span></td><td>{{ v.author|author }}</td><td class="reason">{% set rs = v.reason or "" %}{% if rs|length > 120 %}<details><summary>{{ rs[:120] }}...</summary>{{ rs }}</details>{% else %}{{ rs }}{% endif %}
+{% set vw = views.get(v.version) %}{% if vw and v.status != "candidate" and (vw.changes or vw.reasons) %}<details><summary>{{ L.past_changes }}</summary>
+{% if vw.changes %}<ul>{% for it in vw.changes %}<li>{{ it.text }}{% if it.risk == "loosens" %} <span class="badge b-warn">{{ L.loosens }}</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if v.status == "rejected" and vw.reasons %}<b>{{ L.impact_reasons_stored }}</b><ul>{% for r in vw.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}</details>{% endif %}</td>
 <td>{% if v.status == "retired" %}<form method="post" action="/version/{{ v.version }}/rollback" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>{{ L.make_live }}</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
+{% for v in versions if v.status == "candidate" and views.get(v.version) %}{{ pcard(views[v.version], false) }}{% endfor %}
 </details></div>
 
 <div class="panel pos" id="audit">{{ tip("tip-aud", "About " ~ L.activity_log, "A record of every action taken here: when, who, what it targeted and whether it succeeded.") }}<details><summary>{{ L.activity_log }} (last {{ audit|length }})</summary>
@@ -633,10 +731,13 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
         if state["report"]:
             report = {**state["report"], **report_extra, "changes": describe_ops(state["report"].get("ops"), active["manifest"] if active else None)}
         flashes, state["flashes"] = state["flashes"], []
+        versions = store.list_versions()
+        by_num = {d.get("version"): d for d in versions}
+        views = {d.get("version"): _version_view(d, by_num, None) for d in versions}
         closed = [_decided_view(c) for c in cases if c["status"] in ("convicted", "dismissed")]
         closed.sort(key=lambda c: c["when_full"], reverse=True)
         return env.get_template("index.html").render(
-            active=active, flashes=flashes, trial=trial, versions=store.list_versions(),
+            active=active, flashes=flashes, trial=trial, versions=versions, views=views,
             nominated=[c for c in cases if c["status"] == "nominated"],
             filed=[c for c in cases if c["status"] == "filed"],
             closed=closed, L=UI_LABELS, app_name=APP_NAME, app_subtitle=APP_SUBTITLE, page_size=DECIDED_PAGE_SIZE,

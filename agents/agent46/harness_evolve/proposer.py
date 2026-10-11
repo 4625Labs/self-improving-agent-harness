@@ -31,7 +31,7 @@ SURFACES = ("risk", "tools", "limits", "all")
 # Phrases that signal fraud/severity. Matched against dev failure descriptions only.
 RISK_LEXICON = [
     "arson", "submerged", "hit and run", "vandalism", "abandoned", "no witnesses",
-    "owner away", "stripped", "cloned", "staged",
+    "owner away", "stripped", "cloned", "staged", "cannibalized",
 ]
 
 

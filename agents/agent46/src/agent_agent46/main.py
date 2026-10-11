@@ -42,6 +42,7 @@ from agent_agent46.harness_config import (
 from agent_agent46.llm import build_llm
 from agent_agent46.memory_policy import user_scoped_label
 from agent_agent46.risk import assess_claim_risk
+from agent_agent46.tool_guard import filter_tool_schemas, guarded_tool_node, resolve_allowed
 from agent_agent46.policy_store import (
     Claim,
     Policy,
@@ -1152,8 +1153,9 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
     # Get tools from runtime (automatically wrapped for SecureToolWrapper in the agent sandbox)
     tools = app.get_tools()
 
-    # Bind tool schemas to LLM
-    llm_with_tools = llm.bind_tools(app.get_tool_schemas())
+    # Tool schemas are bound per invocation (see agent_node) so the manifest's tool access can
+    # narrow what the model is offered for the current intent.
+    all_tool_schemas = app.get_tool_schemas()
 
     def agent_node(state: AgentState) -> AgentState:
         from langchain_core.messages import HumanMessage
@@ -1218,8 +1220,13 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
             # Update existing system message if memory context available
             messages = [SystemMessage(content=system_prompt)] + list(messages[1:])
 
+        # Offer only the tools the manifest allows for this intent
+        intent, allowed = resolve_allowed(manifest, state["messages"])
+        offered = filter_tool_schemas(all_tool_schemas, allowed)
+        logger.info(f"Tool access: intent={intent}, offered {len(offered)}/{len(all_tool_schemas)} tools")
+
         # Invoke the LLM
-        response = llm_with_tools.invoke(messages)
+        response = llm.bind_tools(offered).invoke(messages)
 
         return {"messages": [response]}
 
@@ -1227,10 +1234,15 @@ def build_agent(llm: Optional[BaseChatModel] = None) -> CompiledStateGraph:
         last = state["messages"][-1]
         return "tools" if hasattr(last, "tool_calls") and last.tool_calls else "end"  # type: ignore[union-attr]  # LangChain BaseMessage subclass has tool_calls
 
+    def tools_allowed(history: list[BaseMessage]) -> frozenset[str]:
+        # Same resolution as agent_node, on the history the model saw when it chose the calls.
+        _, current_manifest = load_active_manifest(config_store)
+        return resolve_allowed(current_manifest, history)[1]
+
     logger.info("  → Compiling graph...")
     builder = StateGraph(AgentState)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("tools", guarded_tool_node(ToolNode(tools), tools_allowed))
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", should_continue, {"tools": "tools", "end": END})
     builder.add_edge("tools", "agent")

@@ -1,0 +1,270 @@
+[
+ {
+  "id": "th01",
+  "message": "What are the main types of life insurance?",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "explain_insurance_term"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification",
+   "get_quote",
+   "analyze_claim_risk"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "th02",
+  "message": "Define copay for me; my policy is POL-9001",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "lookup_policy"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "th03",
+  "message": "What does a waiting period mean?",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "get_coverage_options"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "th04",
+  "message": "Give me a quote on pet insurance",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_quote"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "th05",
+  "message": "I want to purchase travel coverage for two weeks",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_quote",
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification",
+   "list_customer_claims"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "th06",
+  "message": "Sign up my daughter for a new policy; my own is POL-5005",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "lookup_policy",
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "th07",
+  "message": "Someone vandalized my car overnight",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "file_claim",
+   "analyze_claim_risk"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "th08",
+  "message": "My house caught fire last week",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "file_claim",
+   "lookup_policy",
+   "list_customer_policies"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "th09",
+  "message": "Here are the photos you asked for",
+  "called_tools": [
+   "file_claim"
+  ],
+  "expected_intent": "claims",
+  "needed": [
+   "human_review",
+   "analyze_claim_risk"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims",
+   "sticky"
+  ]
+ },
+ {
+  "id": "th10",
+  "message": "Thanks, any update?",
+  "called_tools": [
+   "check_claim_status"
+  ],
+  "expected_intent": "claims",
+  "needed": [
+   "check_claim_status",
+   "send_notification"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims",
+   "sticky"
+  ]
+ },
+ {
+  "id": "th11",
+  "message": "Good morning",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "lookup_policy"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ },
+ {
+  "id": "th12",
+  "message": "I'd like to quote a car and also my windshield got cracked",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "get_quote",
+   "file_claim"
+  ],
+  "forbidden": [],
+  "severity": "critical",
+  "tags": [
+   "general",
+   "multi"
+  ]
+ },
+ {
+  "id": "th13",
+  "message": "Remember my phone number is 555-0100",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "save_customer_info"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ },
+ {
+  "id": "th14",
+  "message": "Explain what a total loss means and get me a price",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "explain_insurance_term",
+   "get_quote"
+  ],
+  "forbidden": [],
+  "severity": "critical",
+  "tags": [
+   "general",
+   "multi"
+  ]
+ }
+]

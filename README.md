@@ -23,9 +23,11 @@ the evaluator decides, a human owns the limits.
 | Dev accuracy | 0.68 | 0.88 |
 | Held-out accuracy | 0.40 | 0.70 |
 | Critical violations (dev) | 1 | 0 |
+| Tool-access accuracy (dev / held-out) | 0.26 / 0.29 | 1.00 / 1.00 |
 
 On the live agent, an arson claim was auto-approved under the baseline and sent to human review
-under the evolved manifest. The eval sets are small, so read the gains as directional. The
+under the evolved manifest. With the evolved tool access the agent offered 10 of 17 tools for
+information and quote requests, and a full claim lifecycle still completed. The eval sets are small, so read the gains as directional. The
 proposer used for this run is an offline heuristic; the LLM proposer is written but has not been
 run.
 
@@ -53,6 +55,7 @@ Requires the `agentengine` CLI, Docker, and `uv`.
 
 ## Status
 
-Built and tested locally: the versioned manifest, the pure risk function, the fixed evaluator, the
-proposer and patch language, the approve and rollback cycle, and the memory label invariant. Not
-built: tool access as an evolvable surface. Details and known limits are in HANDOFF.md.
+Built and tested locally (291 tests): the versioned manifest, the pure risk function, fixed
+evaluators for risk and for tool access, the proposer and patch language, the approve and rollback
+cycle, per-intent tool access enforced at two points in the agent graph, and the memory label
+invariant. Details and known limits are in HANDOFF.md.

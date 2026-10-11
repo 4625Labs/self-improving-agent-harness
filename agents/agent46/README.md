@@ -17,7 +17,8 @@ Offline evaluator and evolution loop
   `../../project-config.yaml`
 - `harness_config.py`: the versioned manifest store and the invariants a manifest must satisfy
 - `risk.py`: the pure risk function the evaluator scores
-- `evals/`: the fixed evaluator (dev and held-out scenarios, scorer, gate)
+- `tool_access.py` and `tool_guard.py`: per-intent tool allow-lists and their enforcement
+- `evals/`: the fixed evaluators for risk and for tool access (dev and held-out scenarios, scorer, gate)
 - `harness_evolve/`: the proposer, patch language, evolution cycle and CLI. It does not ship in the
   deployed agent.
 
@@ -63,10 +64,12 @@ The exact URL is printed by `agentengine dev up`.
 
 ```bash
 uv sync
-uv run pytest -q                                                   # 99 tests
-uv run python -m evals.run_eval --manifest baseline --split dev    # score the baseline
+uv run pytest -q                                                   # 291 tests
+uv run python -m evals.run_eval --manifest baseline --split dev    # score risk decisions
+uv run python -m evals.tool_eval --manifest baseline --split dev   # score tool access
 
 uv run python -m harness_evolve.cli cycle        # propose, store a candidate, score, gate
+uv run python -m harness_evolve.cli cycle --surface tools   # or: risk | all (default)
 uv run python -m harness_evolve.cli status       # list manifest versions and gate results
 uv run python -m harness_evolve.cli approve 2    # activate a candidate that passed the gate
 uv run python -m harness_evolve.cli rollback 1   # activate an older version
@@ -83,10 +86,11 @@ What may evolve, and what may not:
 | up to 20 learned prompt rules | invariants and their bounds |
 | risk thresholds, inside bounds | the evaluator, scenarios and gate |
 | risk keywords, added only | the claim state machine and `human_review` |
+| per-intent tool allow-lists, narrowing only | the required-tool floor and the intent classifier |
 | | memory label scoping, tool sandboxes, egress |
 
-A patch that changes a threshold or removes a rule needs approval. A patch that only adds a rule or
-keyword is low risk. Nothing is activated automatically unless `--auto-activate-low-risk` is passed.
+A patch that changes a threshold, removes a rule or widens tool access needs approval. A patch that
+only adds a rule or keyword, or narrows tool access, is low risk. Nothing is activated automatically unless `--auto-activate-low-risk` is passed.
 
 ## Memory notes
 
@@ -126,6 +130,8 @@ default/
     │   ├── main.py              agent graph, tools, prompt
     │   ├── harness_config.py    manifest store, invariants, prompt rendering
     │   ├── risk.py              pure risk decision
+    │   ├── tool_access.py       tool inventory, required floor, intent classifier, resolver
+    │   ├── tool_guard.py        offers only allowed tools and blocks denied calls
     │   ├── memory_policy.py     user-scoped memory labels
     │   ├── policy_store.py      policy and claim storage, claim state machine
     │   └── llm.py

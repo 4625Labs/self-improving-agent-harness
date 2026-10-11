@@ -1,6 +1,10 @@
 """Proposers: propose(manifest, failures, split_summary) -> {"ops": [...], "rationale": str}.
 
 Proposers only ever see DEV failures. Held-out data is reserved for the gate in loop.py.
+
+Each proposer has a `surface` ('risk', 'tools' or 'all'); a proposer without one is treated as
+'risk'. Tool-surface proposers receive tool-eval dev failures instead of risk-eval failures
+(see loop._collect_proposals). CompositeProposer groups several proposers via `members`.
 """
 
 import json
@@ -10,7 +14,13 @@ from typing import Any, Protocol
 
 from evals.run_eval import AUTO, RANK, load_scenarios
 
+from agent_agent46.tool_access import INTENTS, REQUIRED_TOOLS, effective_tool_access
+
 from .patch import OP_SCHEMA, PatchError, validate_ops
+
+TOOL_OPS = ("disable_tool", "enable_tool")
+RISK_OPS = tuple(k for k in OP_SCHEMA if k not in TOOL_OPS)
+SURFACES = ("risk", "tools", "all")
 
 # Phrases that signal fraud/severity. Matched against dev failure descriptions only.
 RISK_LEXICON = [
@@ -29,6 +39,7 @@ class HeuristicProposer:
     """Offline, deterministic. Reads dev scenarios (by failure id) and nothing else."""
 
     name = "heuristic"
+    surface = "risk"
 
     def __init__(self) -> None:
         self._dev = {s["id"]: s for s in load_scenarios("dev")}  # never heldout
@@ -72,15 +83,66 @@ class HeuristicProposer:
         return {"ops": ops, "rationale": "; ".join(notes) or "no heuristic applies"}
 
 
+class ToolHeuristicProposer:
+    """Offline, deterministic. Narrows tool access using dev tool-eval failures only.
+
+    It loads no scenario files at all: everything it needs is in the dev failures it is handed.
+    Never proposes a required tool, an already-disabled tool, or enable_tool (widening is human-only).
+    """
+
+    name = "tool-heuristic"
+    surface = "tools"
+
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict) -> dict:
+        allow = {i: set(e["allow"]) for i, e in effective_tool_access(manifest)["intents"].items()}
+        ops: list[dict[str, Any]] = []
+        notes: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for f in sorted(failures, key=lambda f: f["id"]):
+            intent = f.get("intent")
+            if intent not in INTENTS:
+                continue
+            for tool in sorted(f.get("exposed_forbidden") or []):
+                if (intent, tool) in seen or tool not in allow[intent] or tool in REQUIRED_TOOLS[intent]:
+                    continue
+                seen.add((intent, tool))
+                ops.append({"op": "disable_tool", "intent": intent, "tool": tool})
+                notes.append(f"{f['id']}: {tool} exposed for {intent} -> disable")
+        validate_ops(ops)
+        return {"ops": ops, "rationale": "; ".join(notes) or "no tool heuristic applies"}
+
+
+class CompositeProposer:
+    """Runs several proposers, each on its own surface. The loop feeds each member its own failures."""
+
+    surface = "all"
+
+    def __init__(self, members: list) -> None:
+        self.members = list(members)
+        self.name = "+".join(m.name for m in self.members)
+
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
+        ops: list[dict[str, Any]] = []
+        notes: list[str] = []
+        for m in self.members:
+            fs = (tool_failures or []) if getattr(m, "surface", "risk") == "tools" else failures
+            out = m.propose(manifest, fs, split_summary)
+            ops += out["ops"]
+            notes.append(out.get("rationale", ""))
+        validate_ops(ops)
+        return {"ops": ops, "rationale": "; ".join(n for n in notes if n)}
+
+
 class LLMProposer:
     """LLM-backed proposer. Network only when invoked; never used unless --proposer llm."""
 
     name = "llm"
+    surface = "all"
 
     def __init__(self, model: str | None = None) -> None:
         self._model = model
 
-    def build_prompt(self, manifest: dict, failures: list[dict], split_summary: dict) -> str:
+    def build_prompt(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> str:
         dev = {s["id"]: s for s in load_scenarios("dev")}
         cases = []
         for f in failures:
@@ -95,10 +157,16 @@ class LLMProposer:
             f"Failing dev scenarios:\n{json.dumps(cases, indent=1)}\n\n"
             f"Allowed ops (exact fields, nothing else): {json.dumps({k: list(v) for k, v in OP_SCHEMA.items()})}\n"
             "level is 'high' or 'medium'. Never remove baseline keywords. Never ship critical claims as auto_approve.\n"
+            f"Tool access (manifest 'tool_access'; ops disable_tool/enable_tool, intent in {list(INTENTS)}). "
+            "disable_tool narrows a tool out of an intent's allow-list; enable_tool re-widens it and needs human approval. "
+            "Never disable a required tool: "
+            f"{json.dumps({k: sorted(v) for k, v in REQUIRED_TOOLS.items() if k != 'general'})}. "
+            "The 'general' intent may never be narrowed.\n"
+            f"Failing dev tool-access cases:\n{json.dumps(tool_failures or [], indent=1)}\n"
             'Reply with ONLY JSON: {"ops": [...], "rationale": "..."}'
         )
 
-    def propose(self, manifest: dict, failures: list[dict], split_summary: dict) -> dict:
+    def propose(self, manifest: dict, failures: list[dict], split_summary: dict, tool_failures: list[dict] | None = None) -> dict:
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
 
@@ -108,7 +176,7 @@ class LLMProposer:
         from agent_agent46.llm import MODEL
 
         llm = ChatOpenAI(model=self._model or MODEL, api_key=SecretStr(key), use_responses_api=True)
-        raw = llm.invoke(self.build_prompt(manifest, failures, split_summary)).text
+        raw = llm.invoke(self.build_prompt(manifest, failures, split_summary, tool_failures)).text
         return self.parse(raw)
 
     @staticmethod

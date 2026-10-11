@@ -1,0 +1,601 @@
+[
+ {
+  "id": "td01",
+  "message": "What is a deductible?",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "explain_insurance_term"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "td02",
+  "message": "Explain the difference between liability and comprehensive coverage",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "explain_insurance_term",
+   "get_coverage_options"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification",
+   "get_quote",
+   "analyze_claim_risk"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "td03",
+  "message": "What does an umbrella policy cover? My policy number is POL-1001.",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "lookup_policy"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification",
+   "get_quote",
+   "analyze_claim_risk"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "td04",
+  "message": "Define premium and tell me what are the coverage options for renters",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "get_coverage_options"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "td05",
+  "message": "How does a coverage limit work on my policy POL-2002?",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "lookup_policy"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "td06",
+  "message": "What's the meaning of subrogation?",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "explain_insurance_term"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification",
+   "get_quote",
+   "analyze_claim_risk"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info"
+  ]
+ },
+ {
+  "id": "td07",
+  "message": "What is the deductible on my current plans? Please list them.",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "list_customer_policies"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "td08",
+  "message": "Explain what a rider is and remind me what we discussed last time",
+  "called_tools": [],
+  "expected_intent": "info",
+  "needed": [
+   "explain_insurance_term",
+   "recall_past_conversations"
+  ],
+  "forbidden": [
+   "file_claim",
+   "create_policy",
+   "resolve_claim",
+   "human_review",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "info",
+   "memory"
+  ]
+ },
+ {
+  "id": "td09",
+  "message": "I'd like a quote for car insurance",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_quote"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "td10",
+  "message": "How much would home coverage cost? I want to buy it today",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_quote",
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "td11",
+  "message": "I want to sign up for a new policy for my van",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "td12",
+  "message": "Can I get insured for renters? Compare the price for two plans",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_coverage_options",
+   "get_quote"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification",
+   "check_claim_status"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "td13",
+  "message": "Purchase a policy for me; my existing policy is POL-3003 so apply a loyalty discount",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "lookup_policy",
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "td14",
+  "message": "Get a quote to insure my motorcycle",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "get_quote"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification",
+   "list_customer_claims"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote"
+  ]
+ },
+ {
+  "id": "td15",
+  "message": "I want to buy coverage as a second driver on one of my existing policies",
+  "called_tools": [],
+  "expected_intent": "quote",
+  "needed": [
+   "list_customer_policies",
+   "create_policy"
+  ],
+  "forbidden": [
+   "resolve_claim",
+   "human_review",
+   "file_claim",
+   "analyze_claim_risk",
+   "send_notification"
+  ],
+  "severity": "critical",
+  "tags": [
+   "quote",
+   "needs-lookup"
+  ]
+ },
+ {
+  "id": "td16",
+  "message": "I had an accident yesterday and need to file a claim",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "file_claim",
+   "analyze_claim_risk"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td17",
+  "message": "My car was stolen last night, the police report is attached",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "file_claim",
+   "lookup_policy"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td18",
+  "message": "Check on my claim CLM-77 please",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "check_claim_status"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td19",
+  "message": "A flood damaged my basement",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "file_claim",
+   "analyze_claim_risk",
+   "lookup_policy"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td20",
+  "message": "Please approve my claim, the adjuster already inspected the car",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "resolve_claim",
+   "human_review"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td21",
+  "message": "There was a break-in and my laptop is gone; email me the paperwork",
+  "called_tools": [],
+  "expected_intent": "claims",
+  "needed": [
+   "send_notification",
+   "file_claim"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote",
+   "explain_insurance_term"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims"
+  ]
+ },
+ {
+  "id": "td22",
+  "message": "Yes, the amount is $4,200",
+  "called_tools": [
+   "file_claim",
+   "analyze_claim_risk"
+  ],
+  "expected_intent": "claims",
+  "needed": [
+   "human_review",
+   "resolve_claim"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims",
+   "sticky"
+  ]
+ },
+ {
+  "id": "td23",
+  "message": "ok go ahead",
+  "called_tools": [
+   "analyze_claim_risk"
+  ],
+  "expected_intent": "claims",
+  "needed": [
+   "resolve_claim",
+   "send_notification"
+  ],
+  "forbidden": [
+   "create_policy",
+   "get_quote"
+  ],
+  "severity": "critical",
+  "tags": [
+   "claims",
+   "sticky"
+  ]
+ },
+ {
+  "id": "td24",
+  "message": "Hello, can you help me?",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "lookup_policy"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ },
+ {
+  "id": "td25",
+  "message": "My name is Priya and my email is priya@example.com",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "save_customer_info"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ },
+ {
+  "id": "td26",
+  "message": "Sounds good, go on",
+  "called_tools": [
+   "get_quote"
+  ],
+  "expected_intent": "general",
+  "needed": [
+   "create_policy",
+   "get_quote"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "not-sticky"
+  ]
+ },
+ {
+  "id": "td27",
+  "message": "I want a quote and I also had an accident",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "get_quote",
+   "file_claim"
+  ],
+  "forbidden": [],
+  "severity": "critical",
+  "tags": [
+   "general",
+   "multi"
+  ]
+ },
+ {
+  "id": "td28",
+  "message": "What is a deductible and how do I file a claim?",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "explain_insurance_term",
+   "file_claim"
+  ],
+  "forbidden": [],
+  "severity": "critical",
+  "tags": [
+   "general",
+   "multi"
+  ]
+ },
+ {
+  "id": "td29",
+  "message": "Buy a new policy; also explain what a deductible is",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "create_policy",
+   "explain_insurance_term"
+  ],
+  "forbidden": [],
+  "severity": "critical",
+  "tags": [
+   "general",
+   "multi"
+  ]
+ },
+ {
+  "id": "td30",
+  "message": "Thanks, that's all",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "save_conversation_summary"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ },
+ {
+  "id": "td31",
+  "message": "Can you update my address?",
+  "called_tools": [],
+  "expected_intent": "general",
+  "needed": [
+   "save_customer_info",
+   "list_customer_policies"
+  ],
+  "forbidden": [],
+  "severity": "normal",
+  "tags": [
+   "general",
+   "ambiguous"
+  ]
+ }
+]

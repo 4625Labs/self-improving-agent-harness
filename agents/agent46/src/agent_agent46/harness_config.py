@@ -19,6 +19,8 @@ from typing import Any, Optional
 
 from pymongo import MongoClient
 
+from agent_agent46.tool_access import baseline_tool_access, validate_tool_access
+
 logger = logging.getLogger(__name__)
 
 MANIFEST_COLLECTION = "harness_manifests"
@@ -39,6 +41,8 @@ DEFAULT_MANIFEST: dict[str, Any] = {
         "high": ["total loss", "totaled", "stolen", "theft", "fire", "flood"],
         "medium": ["significant damage", "major repair", "structural"],
     },
+    # Per-intent tool allow-lists. Baseline allows everything; see tool_access.py for the limits.
+    "tool_access": baseline_tool_access(),
 }
 
 # Hard limits a manifest must satisfy, owned by humans. Thresholds can tighten freely but
@@ -64,9 +68,13 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
 
     # Only these fields are evolvable. Anything else (e.g. memory label settings) is rejected so
     # a proposer cannot smuggle new behavior into the manifest.
-    unknown = set(manifest) - {"rules", "thresholds", "keywords"}
+    unknown = set(manifest) - {"rules", "thresholds", "keywords", "tool_access"}
     if unknown:
         errors.append(f"unknown manifest fields: {sorted(unknown)}")
+
+    # Older manifests have no tool_access and mean "baseline", so it is optional.
+    if "tool_access" in manifest:
+        errors.extend(validate_tool_access(manifest["tool_access"]))
 
     rules = manifest.get("rules")
     if not isinstance(rules, list):

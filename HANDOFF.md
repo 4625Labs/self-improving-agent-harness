@@ -19,6 +19,7 @@ own.
             evolvable (data, in MongoDB)                fixed (code, owned by humans)
         ┌──────────────────────────────────┐        ┌───────────────────────────────────┐
         │ rules · thresholds · keywords    │        │ invariants · evaluator · gate     │
+        │ tool access (per intent)         │        │ required-tool floor · classifier  │
         │ versioned manifest               │        │ control flow · human-review step  │
         └───────────────┬──────────────────┘        │ sandboxes · egress                │
                         │ read at runtime           └───────────────────────────────────┘
@@ -77,6 +78,8 @@ that tells you it was broken.
 
 9. **Tier approval by risk.** Adding a rule or keyword is low risk. Changing a threshold or
    removing a rule needs a human. Auto-activation is opt-in and applies to low-risk patches only.
+   Tools follow the same rule: narrowing (`disable_tool`) is low risk, widening (`enable_tool`)
+   needs approval.
 
 10. **Bound every open field.** An unbounded `add_keyword` could add "door". The invariants cap
     keyword count, length and characters, and the manifest rejects any field it does not know.
@@ -93,7 +96,16 @@ that tells you it was broken.
 13. **Prove it on the live path.** Unit tests do not show the manifest is in use. We sent the same
     kind of claim before and after approving a version and read the version tag back.
 
-14. **Fail safe, and fail loudly.** If the store is unreachable the agent runs the baseline.
+14. **Enforce at more than one point, from one resolver.** Tool access is applied when the model
+    is offered its tools and again before a tool runs, because a model can name a tool it was never
+    offered. The agent, the runtime guard and the evaluator all call `resolve_tool_access`, so they
+    cannot disagree. (`tool_access.py`, `tool_guard.py`.)
+
+15. **Ambiguity must fail open, and a fixed floor must protect workflows.** An unclear intent maps
+    to `general`, whose tools can never be narrowed. A required-tool floor per intent, plus a
+    claim-in-flight rule, means a misclassified message can never strand a half-finished claim.
+
+16. **Fail safe, and fail loudly.** If the store is unreachable the agent runs the baseline.
     Known gap: that fallback is currently silent apart from a log line.
 
 ---
@@ -180,12 +192,14 @@ Everything in 3.3 then applies unchanged.
     │   ├── main.py           LangGraph agent, tools, prompt; loads the manifest per request
     │   ├── harness_config.py manifest store, invariants, validation, prompt rendering
     │   ├── risk.py           the pure decision function
+    │   ├── tool_access.py    tool inventory, required-tool floor, intent classifier, resolver
+    │   ├── tool_guard.py     runtime enforcement: filters offered tools, blocks denied calls
     │   ├── memory_policy.py  user-scoped memory labels
     │   ├── policy_store.py   policy and claim storage, claim state machine
     │   └── llm.py            model selection
-    ├── evals/                FIXED evaluator: scenarios, scorer, gate
+    ├── evals/                FIXED evaluators: risk (run_eval) and tool access (tool_eval)
     ├── harness_evolve/       proposer, patch language, cycle, CLI (never ships in the agent)
-    └── tests/                99 tests
+    └── tests/                291 tests
 ```
 
 `.claude/skills` and `.agents/skills` are the Agent Engine template's skill docs, kept as shipped.
@@ -199,6 +213,9 @@ Everything in 3.3 then applies unchanged.
 - Versioned manifest in MongoDB, with invariants checked at propose, activate and load.
 - A pure risk function with 22 characterization tests.
 - A fixed evaluator: 25 dev and 10 held-out scenarios, 11 of them critical, and a four-part gate.
+- Tool access as an evolvable surface: per-intent allow-lists, a human-owned required-tool floor,
+  a fixed intent classifier, a second evaluator (31 dev and 14 held-out scenarios), `disable_tool` and
+  `enable_tool` patch operations, and enforcement at two points in the agent graph.
 - An offline heuristic proposer, the patch language, and the cycle with approve and rollback.
 - Memory label invariant, enforced by a source-parsing test that was itself negative-tested.
 - Live A/B on the running agent.
@@ -210,12 +227,31 @@ Everything in 3.3 then applies unchanged.
 | Critical violations (dev) | 1 | 0 |
 | Live arson claim (a $750 claim under v1, a $700 claim under v2) | low risk, auto-approved | high risk, sent to human review |
 
-**Designed but not built:** tool access as an evolvable surface (see section 7).
+**Tool access, verified live:** with manifest v3 active the agent offered 10 of 17 tools for
+`info` and `quote` and 14 of 17 for `claims`. A claim was filed, suspended for human review,
+resumed by the reviewer and closed as approved with no guard denials. The denial path itself (a
+model naming a tool it was not offered) is proven offline with a fake model, not live.
+
+| Tool-access eval | Baseline (all tools allowed) | Evolved (v3) |
+|---|---|---|
+| Dev accuracy | 0.26 | 1.00 |
+| Held-out accuracy | 0.29 | 1.00 |
+| Critical violations (dev / held-out) | 23 / 10 | 0 / 0 |
 
 **Written but never run:** the LLM proposer. It makes network calls and was deliberately left off.
 
 **Known limits**
 
+- Tool access is chosen by a keyword classifier on the latest user message. Ambiguity fails open to
+  all tools, so a user who mixes intent words widens their own access. It protects against model
+  mistakes, not against someone controlling the wording.
+- The tool scenarios are regular: held-out reached 1.00 as easily as dev. Treat that as a sign the
+  set is too easy, not as proof of generalisation. About 85% of dev scenarios are tagged critical,
+  so the critical count is nearly a blanket label.
+- A denied tool call is just an error message to the model. It may retry or answer wrongly, and the
+  system prompt does not mention restrictions.
+- A cycle that touches only one surface skips the gate for the other surface (marked `untouched`),
+  because the risk gate fails on any critical violation even when the baseline already had one.
 - The heuristic proposer only finds what its fixed phrase list contains. It demonstrates the loop,
   not intelligence.
 - The eval sets are small. A gain of 0.3 is a few scenarios.
@@ -237,7 +273,7 @@ agentengine dev status                  # shows the mongo port and the playgroun
 uv sync
 uv run pytest -q
 uv run python -m evals.run_eval --manifest baseline --split dev
-uv run python -m harness_evolve.cli cycle
+uv run python -m harness_evolve.cli cycle --surface all     # or: risk | tools
 uv run python -m harness_evolve.cli status
 uv run python -m harness_evolve.cli approve 2
 uv run python -m harness_evolve.cli rollback 1
@@ -247,7 +283,12 @@ uv run python -m harness_evolve.cli rollback 1
   hostname, so a plain `mongodb://localhost:<port>` times out. The port is assigned per machine.
 - **Invoking the agent needs a `user_id`.** Without one the runtime fails with
   `durable Memory identity is incomplete`.
-- **Importing `main.py` outside the runtime needs `RUNNER_MODE=aer`.**
+- **Importing `main.py` outside the runtime needs `RUNNER_MODE=aer`.** `build_agent(llm=fake)` then
+  runs offline, which is how the enforcement tests drive the real graph.
+- **Resuming a suspended claim over HTTP** takes the original `session_id` and `user_id` plus
+  `{"resume_map": {"<interrupt id>": {"decision": "approved", "reviewer_notes": "..."}}}`.
+- **A fail-open guard can hide bugs.** A missing import in `tool_guard.py` would have been swallowed
+  and silently restored full access. Tests must exercise the resolver, and ERROR logs need an alert.
 - **Memory needs the two-level layout:** `project-config.yaml` at the repo root, the workspace
   beneath it.
 - **Memory labels are unique per org.** A second user saving the same label with the default
@@ -264,13 +305,10 @@ uv run python -m harness_evolve.cli rollback 1
 
 ## 7. What to do next
 
-1. **Tool access as an evolvable surface.** Add `tool_access` to the manifest as a per-intent
-   allow-list that can only narrow what `agent.yaml` already places in a sandbox. Enforce it twice:
-   when binding tool schemas to the model, and again before a tool runs, because a model can name
-   a tool it was never offered. Any expansion needs approval, and `human_review` can never be
-   removed. Scoring it needs whole-conversation scenarios. `build_agent(llm=...)` accepts a fake
-   model, which is the likely route. The open question is how to score tool-use trajectories
-   without paying for an LLM on every run.
+1. **Harden tool access.** Replace the keyword classifier with something harder to steer, tell the
+   model which tools it was not offered so a denial is not a surprise, and add trajectory scenarios
+   that run whole conversations through `build_agent(llm=fake)`. Make the eval set larger and less
+   regular, and tag critical cases sparingly.
 2. **Run the LLM proposer** for one cycle against a fresh baseline and compare it with the
    heuristic one. Expect it to need a stricter parser than you think.
 3. **Grow the eval sets** and add scenarios the proposer has never seen.
@@ -295,5 +333,7 @@ uv run python -m harness_evolve.cli rollback 1
 | Thresholds may tighten but not loosen past baseline | loosening is the dangerous direction, so it needs a human and a new baseline |
 | Baseline keywords can be added to but never removed | protects the cases that matter most |
 | Evaluator and invariants sit outside the evolvable layer | otherwise the proposer can grade itself |
+| Tool access narrows per intent and can only widen with approval | narrowing cannot break a workflow because required tools are fixed, widening is the risky direction |
+| Ambiguous intent maps to `general` (all tools) | a wrong guess can then only widen access, never strand a user |
 | Memory label separator is `::` | a plain `_` join lets two different (user, key) pairs collide |
 | `uv.lock` stays git-ignored | the template's convention: CI resolves fresh under its cooldown policy |

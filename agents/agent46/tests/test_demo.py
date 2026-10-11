@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_agent46.harness_config import DEFAULT_MANIFEST, HarnessConfigStore  # noqa: E402
 from agent_agent46.risk import assess_claim_risk  # noqa: E402
-from evals.run_eval import AUTO, RANK, REVIEW, evaluate_all  # noqa: E402
+from evals.run_eval import AUTO, MANUAL, RANK, REVIEW, evaluate_all  # noqa: E402
+from harness_evolve.proposer import RISK_LEXICON  # noqa: E402
 from harness_evolve import demo  # noqa: E402
 from harness_evolve.audit import ConfirmationRequired  # noqa: E402
 from harness_evolve.court import CourtDocket  # noqa: E402
@@ -257,3 +258,110 @@ def test_cli_routes_demo(monkeypatch):
     monkeypatch.setattr(demo, "demo_main", lambda a, rest: seen.update(rest=rest, yes=a.yes) or 0)
     assert cli.main(["--yes", "demo", "run", "--pace", "0", "--scenario", "cloned-vehicle"]) == 0
     assert seen == {"rest": ["run", "--pace", "0", "--scenario", "cloned-vehicle"], "yes": True}
+
+
+def v7_like_env():
+    """Fake env whose live manifest already has arson, submerged, cannibalized, staged."""
+    db, store = make_env()
+    m = copy.deepcopy(DEFAULT_MANIFEST)
+    m["keywords"]["high"] += ["arson", "submerged", "cannibalized", "staged"]
+    store._collection.update_one({"status": "active"}, {"$set": {"manifest": m}})
+    return db, store, m
+
+
+def case_claims(db, status):
+    return sorted(c["claim_id"] for c in db["court_cases"].docs
+                  if c["status"] == status and c["claim_id"] in demo.CLAIM_IDS)
+
+
+def _all_real_misses(db, manifest):
+    for c in db["court_cases"].docs:
+        if c["claim_id"] in demo.CLAIM_IDS:
+            doc = db["insurance_claims"].find_one({"claim_id": c["claim_id"]})
+            assert demo._label(doc, manifest) == "real miss", c["claim_id"]
+            assert RANK[doc["recommendation"]] < RANK[MANUAL]
+
+
+def test_variants_are_natural_lexicon_only_and_below_manual_at_baseline():
+    for cid, variants in demo.VARIANTS.items():
+        for desc, amount in variants:
+            assert not any(w in desc.lower() for w in ("test", "demo", "simulat"))
+            assert any(p in desc.lower() for p in RISK_LEXICON)
+            rec = assess_claim_risk({"claim_amount": amount, "claim_type": demo._BY_ID[cid]["type"],
+                                     "description": desc}, demo.BASE_POLICY, [], copy.deepcopy(DEFAULT_MANIFEST))
+            assert rec["recommendation"] in (AUTO, REVIEW), cid
+
+
+def test_seed_baseline_all_real_misses(env):
+    db, store = env
+    demo.seed(db, store, out=quiet)
+    assert case_statuses(db) == ["filed"] * 2 + ["nominated"] * 3
+    _all_real_misses(db, DEFAULT_MANIFEST)
+
+
+def test_seed_against_v7_like_picks_alternatives_all_real_misses():
+    db, store, m = v7_like_env()
+    lines = []
+    demo.seed(db, store, out=lines.append)
+    assert case_statuses(db) == ["filed"] * 2 + ["nominated"] * 3
+    _all_real_misses(db, m)
+    assert not any("weaker" in line for line in lines)
+    assert "staged" not in db["insurance_claims"].find_one({"claim_id": "CLM-SIM-03"})["description"]
+    assert "cannibalized" not in db["insurance_claims"].find_one({"claim_id": "CLM-SIM-04"})["description"]
+    for cid in ("CLM-SIM-08", "CLM-SIM-09", "CLM-SIM-10"):  # look-alikes unchanged
+        doc = db["insurance_claims"].find_one({"claim_id": cid})
+        assert doc["description"] == demo._BY_ID[cid]["desc"] and doc["recommendation"] == AUTO
+
+
+def test_seed_replaces_exhausted_claim_with_another_miss():
+    db, store, m = v7_like_env()
+    m["keywords"]["high"] += ["stripped", "hit and run", "owner away", "vandalism"]  # 01 has no miss left
+    store._collection.update_one({"status": "active"}, {"$set": {"manifest": m}})
+    lines = []
+    demo.seed(db, store, out=lines.append)
+    assert any("CLM-SIM-01: already fixed" in line for line in lines)
+    assert case_statuses(db) == ["filed"] * 2 + ["nominated"] * 3
+    assert "CLM-SIM-01" not in case_claims(db, "nominated") + case_claims(db, "filed")
+    _all_real_misses(db, m)
+
+
+def test_staged_accident_already_fixed_on_v7_like():
+    db, store, _m = v7_like_env()
+    demo.seed(db, store, out=quiet)
+    before = len(db["court_cases"].docs)
+    with pytest.raises(demo.AlreadyFixed, match="already fixed by v1") as e:
+        run(db, store, "staged-accident")
+    assert "choose another scenario" in str(e.value) and "cloned-vehicle" in str(e.value)
+    assert [v["status"] for v in store.list_versions()] == ["active"]
+    assert len(db["court_cases"].docs) == before
+
+
+def test_cloned_and_trap_still_behave_on_v7_like():
+    db, store, m = v7_like_env()
+    demo.seed(db, store, out=quiet)
+    res = run(db, store, "cloned-vehicle")
+    assert res["gate"] == "pass" and res["status"] == "candidate"
+    assert "cloned" in {o["keyword"] for o in res["ops"] if o["op"] == "add_keyword"}
+    store._collection.update_one({"status": "candidate"}, {"$set": {"status": "rejected"}})  # the human click
+    res = run(db, store, "abandoned-lookalike")
+    assert res["gate"] == "fail" and res["status"] == "rejected"
+    cand = apply_patch(m, res["ops"])
+    assert "abandoned" in cand["keywords"]["medium"]
+    assert evaluate_all(cand)["dev"]["over_escalation_rate"] > evaluate_all(m)["dev"]["over_escalation_rate"]
+
+
+def test_status_labels_real_miss_vs_already_handled(env):
+    db, store = env
+    demo.seed(db, store, out=quiet)
+    lines = []
+    st = demo.status(db, store, out=lines.append)
+    assert set(st["case_labels"].values()) == {"real miss"}
+    assert any("CLM-SIM-03" in line and "real miss" in line for line in lines)
+    m = copy.deepcopy(DEFAULT_MANIFEST)  # live policy later adopts 'staged'
+    m["keywords"]["high"].append("staged")
+    store._collection.update_one({"status": "active"}, {"$set": {"manifest": m}})
+    lines.clear()
+    st = demo.status(db, store, out=lines.append)
+    assert st["case_labels"]["CLM-SIM-03"] == "already handled"
+    assert st["case_labels"]["CLM-SIM-01"] == "real miss"
+    assert any("CLM-SIM-03" in line and "already handled" in line for line in lines)

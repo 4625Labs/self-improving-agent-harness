@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent_agent46.harness_config import DEFAULT_MANIFEST  # noqa: E402
 from agent_agent46.policy_store import CLAIMS_COLLECTION, POLICY_COLLECTION, Claim, Policy  # noqa: E402
 from agent_agent46.risk import assess_claim_risk  # noqa: E402
-from evals.run_eval import AUTO, MANUAL, REVIEW  # noqa: E402
+from evals.run_eval import AUTO, MANUAL, RANK, REVIEW  # noqa: E402
 
 from .audit import check_remote, os_user, record, run_confirmed  # noqa: E402
 from .court import COURT_COLLECTION, CourtDocket  # noqa: E402
@@ -35,54 +35,44 @@ SIMULATED_ADJUSTER = "Demo Adjuster (simulated)"
 DEFAULT_UI_URL = "http://127.0.0.1:8765"
 
 # Seeded claims. stored recommendation is computed at seed time with the real risk function under the
-# live manifest. `seed_case` is the court status seeded for the claim (None = appears only during `run`).
+# live manifest. The first 7 are candidates for the Nominated / Filed cases; 08-10 are look-alike controls.
 CLAIMS = [
-    {"id": "CLM-SIM-01", "type": "comprehensive", "amount": 850.0, "seed_case": "nominated",
-     "source": "manual",
+    {"id": "CLM-SIM-01", "type": "comprehensive", "amount": 850.0, "source": "manual",
      "reason": "Closed in 40 minutes with no inspection; matches a parts-stripping pattern seen at the same car park.",
      "desc": "Returned to the car after a night shift and found all four wheels, the catalytic converter and "
              "the stereo gone; the car was left stripped on its rims in the staff car park."},
-    {"id": "CLM-SIM-02", "type": "collision", "amount": 900.0, "seed_case": "nominated",
-     "source": "raindrop_signal",
+    {"id": "CLM-SIM-02", "type": "collision", "amount": 900.0, "source": "raindrop_signal",
      "reason": "Raindrop signal 'vin_mismatch_after_approval' fired on the follow-up conversation.",
      "desc": "Registry check returned two vehicles with the same VIN after a minor parking scrape; the car "
              "was bought privately last month and the plates look cloned."},
-    {"id": "CLM-SIM-03", "type": "collision", "amount": 5400.0, "seed_case": "nominated",
-     "source": "reviewer_disagreement", "reason": None,  # derived from the stored recommendation
+    {"id": "CLM-SIM-03", "type": "collision", "amount": 5400.0, "source": "reviewer_disagreement", "reason": None,  # derived from the stored recommendation
      "desc": "Low speed rear-end collision on the ring road at 2 a.m.; the other driver left before police "
              "arrived and the footage suggests the crash was staged between two cars braking together."},
-    {"id": "CLM-SIM-04", "type": "comprehensive", "amount": 6200.0, "seed_case": "filed",
-     "source": "manual",
+    {"id": "CLM-SIM-04", "type": "comprehensive", "amount": 6200.0, "source": "manual",
      "reason": "Investigator found the shell had been sold for parts before the claim was paid.",
      "desc": "Engine, gearbox and both doors removed from a car parked at a storage yard for three weeks; "
              "the shell looks cannibalized for parts."},
-    {"id": "CLM-SIM-05", "type": "comprehensive", "amount": 780.0, "seed_case": "filed",
-     "source": "manual",
+    {"id": "CLM-SIM-05", "type": "comprehensive", "amount": 780.0, "source": "manual",
      "reason": "Neighbours reported the car was left on the service road for weeks before the damage was claimed.",
      "desc": "Car sat on a service road for weeks with flat tyres and no plates before the owner reported "
              "damage; neighbours describe it as abandoned."},
-    {"id": "CLM-SIM-06", "type": "collision", "amount": 700.0, "seed_case": None,
-     "source": "raindrop_signal",
+    {"id": "CLM-SIM-06", "type": "collision", "amount": 700.0, "source": "raindrop_signal",
      "reason": "Raindrop signal 'repeat_counterparty' fired: same two drivers as an earlier claim.",
      "desc": "Fender damage reported after a collision at a roundabout; the same two drivers filed a near "
              "identical claim last spring and the scene looks staged."},
-    {"id": "CLM-SIM-07", "type": "comprehensive", "amount": 950.0, "seed_case": None,
-     "source": "raindrop_signal",
+    {"id": "CLM-SIM-07", "type": "comprehensive", "amount": 950.0, "source": "raindrop_signal",
      "reason": "Raindrop signal 'vin_plate_replaced' fired on the glass-break claim.",
      "desc": "Glass break claim on an imported hatchback whose VIN plate was replaced; the dealer says the "
              "vehicle may be cloned from a scrapped car."},
-    {"id": "CLM-SIM-08", "type": "comprehensive", "amount": 400.0, "seed_case": None,
-     "source": "manual",
+    {"id": "CLM-SIM-08", "type": "comprehensive", "amount": 400.0, "source": "manual",
      "reason": "Control case: a correctly approved claim that must stay auto-approved.",
      "desc": "Abandoned shopping trolley rolled across the supermarket car park and dented the rear door "
              "of the insured car; the store accepted liability."},
-    {"id": "CLM-SIM-09", "type": "comprehensive", "amount": 350.0, "seed_case": None,
-     "source": "manual",
+    {"id": "CLM-SIM-09", "type": "comprehensive", "amount": 350.0, "source": "manual",
      "reason": "Control case: a correctly approved claim that must stay auto-approved.",
      "desc": "A neighbour's abandoned bicycle fell against the driver door overnight and scratched the paint; "
              "the neighbour has apologised and offered to pay."},
-    {"id": "CLM-SIM-10", "type": "comprehensive", "amount": 300.0, "seed_case": None,
-     "source": "manual",
+    {"id": "CLM-SIM-10", "type": "comprehensive", "amount": 300.0, "source": "manual",
      "reason": "Control case: a correctly approved claim that must stay auto-approved.",
      "desc": "Rear window cracked by a rock kicked up while driving past an abandoned building site; the "
              "site manager confirmed the hoarding was down."},
@@ -90,27 +80,79 @@ CLAIMS = [
 CLAIM_IDS = [c["id"] for c in CLAIMS]
 _BY_ID = {c["id"]: c for c in CLAIMS}
 
+# Alternative (description, amount) per claim, tried in order when the original wording is no longer a miss
+# under the live manifest (for example its keyword has since been added). Each uses only phrases from
+# proposer.RISK_LEXICON and amounts that keep the baseline risk function below manual review.
+VARIANTS = {
+    "CLM-SIM-01": [
+        ("The owner away on a work trip for ten days; the car was found on bricks in the driveway with all four "
+         "wheels, the catalytic converter and the stereo gone.", 850.0),
+        ("Wheels, catalytic converter and stereo taken from the car in the staff car park in what looks like "
+         "organised vandalism; two other cars had the same damage.", 850.0),
+    ],
+    "CLM-SIM-02": [
+        ("Registry check returned two vehicles with the same VIN after a parking scrape; the other driver left "
+         "in a hit and run and the plates on the car do not match the registry record.", 900.0),
+        ("Minor parking scrape with no witnesses; the registry shows two cars on the road with this VIN and "
+         "the plates do not match the paperwork.", 900.0),
+    ],
+    "CLM-SIM-03": [
+        ("Low speed rear-end collision on the ring road at 2 a.m.; the other driver left before police arrived "
+         "in what officers are treating as a hit and run, and the footage is unclear.", 5400.0),
+        ("Low speed rear-end collision on the ring road at 2 a.m. with no witnesses; the other driver left "
+         "before police arrived and the dashcam footage is unclear.", 5400.0),
+    ],
+    "CLM-SIM-04": [
+        ("Engine, gearbox and both doors removed from a car parked at a storage yard for three weeks; the "
+         "shell looks stripped for parts.", 6200.0),
+        ("Car left at a storage yard with the owner away abroad for three weeks; on return the engine, "
+         "gearbox and both doors had been removed.", 6200.0),
+    ],
+    "CLM-SIM-05": [
+        ("Car sat on a service road for weeks with flat tyres and no plates, the owner away abroad, and "
+         "damage was reported on return.", 780.0),
+        ("Car damaged overnight on a service road where it had stood for weeks; there were no witnesses and "
+         "the owner only reported it on return.", 780.0),
+    ],
+    "CLM-SIM-06": [
+        ("Fender damage reported after a collision at a roundabout; the other driver drove off in a hit and "
+         "run and the same two drivers filed a near identical claim last spring.", 700.0),
+        ("Fender damage reported after a collision at a roundabout with no witnesses; the same two drivers "
+         "filed a near identical claim last spring.", 700.0),
+    ],
+    "CLM-SIM-07": [
+        ("Glass break claim on an imported hatchback after vandalism in a car park; the dealer notes the VIN "
+         "plate was replaced and the paperwork does not match.", 950.0),
+        ("Glass break claim on an imported hatchback with no witnesses; the dealer notes the VIN plate was "
+         "replaced and the history looks thin.", 950.0),
+    ],
+}
+
 # (claim_id, expected recommendation, critical)
 SCENARIOS = {
     "parts-theft": {
+        "keywords": ("stripped", "cannibalized"),
         "title": "Parts stripping ring",
         "summary": "adds 'stripped' and 'cannibalized' as high-risk keywords",
         "claims": [("CLM-SIM-01", MANUAL, True), ("CLM-SIM-04", MANUAL, True)],
         "trap": False,
     },
     "staged-accident": {
+        "keywords": ("staged",),
         "title": "Staged collisions",
         "summary": "adds 'staged' as a high-risk keyword",
         "claims": [("CLM-SIM-03", MANUAL, True), ("CLM-SIM-06", MANUAL, True)],
         "trap": False,
     },
     "cloned-vehicle": {
+        "keywords": ("cloned",),
         "title": "Cloned VINs",
         "summary": "adds 'cloned' as a high-risk keyword",
         "claims": [("CLM-SIM-02", MANUAL, True), ("CLM-SIM-07", MANUAL, True)],
         "trap": False,
     },
     "abandoned-lookalike": {
+        "keywords": ("abandoned",),
         "title": "Abandoned vehicle, with a look-alike trap",
         "summary": "adds 'abandoned' as a medium keyword, which also catches legitimate claims that merely "
                    "mention the word, so the gate REJECTS it (over-escalation rises)",
@@ -120,6 +162,57 @@ SCENARIOS = {
     },
 }
 DEFAULT_SCENARIO = "parts-theft"
+EXPECTED = {cid: exp for sc in SCENARIOS.values() for cid, exp, _ in sc["claims"]}
+POOL = [c["id"] for c in CLAIMS if EXPECTED[c["id"]] != AUTO]  # candidates for Nominated / Filed, in order
+N_NOMINATED, N_FILED = 3, 2
+BASE_POLICY = {"risk_score": 0.3, "coverage_limit": 50000}
+
+
+class AlreadyFixed(RuntimeError):
+    """The scenario's fix is already in the live manifest; there is nothing to demonstrate."""
+
+
+def _rec(claim_type, amount, desc, policy, manifest) -> str:
+    return assess_claim_risk({"claim_amount": amount, "claim_type": claim_type, "description": desc},
+                             policy, [], manifest)["recommendation"]
+
+
+def is_miss(cid: str, rec: str) -> bool:
+    """A real miss: the policy under-escalates relative to the scenario's expected outcome."""
+    return RANK[rec] < RANK[EXPECTED[cid]]
+
+
+def resolve(manifest: dict, policy: dict | None = None) -> list[dict]:
+    """Every claim with the first wording (original, then variants) that is a real miss under `manifest`.
+    `miss` is None for controls; `variant` is 0 for the original wording."""
+    policy = policy or BASE_POLICY
+    out = []
+    for c in CLAIMS:
+        if EXPECTED[c["id"]] == AUTO:
+            out.append(c | {"miss": None, "variant": 0})
+            continue
+        options = [(c["desc"], c["amount"])] + VARIANTS.get(c["id"], [])
+        for i, (desc, amount) in enumerate(options):
+            if is_miss(c["id"], _rec(c["type"], amount, desc, policy, manifest)):
+                out.append(c | {"desc": desc, "amount": amount, "miss": True, "variant": i})
+                break
+        else:
+            out.append(c | {"miss": False, "variant": 0})
+    return out
+
+
+def _covered(manifest: dict, kw: str) -> bool:
+    return any(kw in k.lower() for lvl in ("high", "medium") for k in manifest["keywords"][lvl])
+
+
+def scenario_fixed(manifest: dict, name: str) -> bool:
+    return all(_covered(manifest, kw) for kw in SCENARIOS[name]["keywords"])
+
+
+def _label(doc: dict, manifest: dict, policy: dict | None = None) -> str:
+    """'real miss' or 'already handled' for a stored claim under the live manifest."""
+    rec = _rec(doc["claim_type"], doc["claim_amount"], doc["description"], policy or BASE_POLICY, manifest)
+    return "real miss" if is_miss(doc["claim_id"], rec) else "already handled"
 
 
 def _now() -> str:
@@ -183,19 +276,39 @@ def seed(db, store, user_id: str = DEFAULT_USER, actor: str = "unknown", out=pri
     policy = _clean(db[POLICY_COLLECTION].find_one({"policy_number": POLICY_NUMBER}))
     court = CourtDocket(db)
     created_claims, notes = 0, []
+    has_case = {c["claim_id"] for c in court.list_cases()}
+    live = policy
+    resolved = {r["id"]: r for r in resolve(manifest, live)}
+    docs = {}
     for c in CLAIMS:
+        r = resolved[c["id"]]
         doc = _clean(db[CLAIMS_COLLECTION].find_one({"claim_id": c["id"]}))
+        if doc is not None and c["id"] not in has_case and (doc["description"], doc["claim_amount"]) != (
+                r["desc"], r["amount"]):
+            db[CLAIMS_COLLECTION].delete_many({"claim_id": c["id"]})  # stale wording from an older live policy
+            doc = None
         if doc is None:
-            doc = _claim_doc(c, user_id, policy, version, manifest)
+            doc = _claim_doc(r, user_id, policy, version, manifest)
             db[CLAIMS_COLLECTION].insert_one(dict(doc))
             created_claims += 1
-        if doc["recommendation"] == MANUAL:
-            notes.append(f"{c['id']}: live policy already routes this to manual review; the story is weaker")
-        if c["seed_case"] is None:
-            continue
+        docs[c["id"]] = doc
+        if r["variant"]:
+            notes.append(f"{c['id']}: original wording is already handled by v{version}; using alternative "
+                         f"wording #{r['variant']} so the live policy really misses it")
+    # A claim counts only if its stored wording is a real miss under the live manifest.
+    misses = [cid for cid in POOL if _label(docs[cid], manifest, live) == "real miss"]
+    for cid in POOL:
+        if cid not in misses:
+            notes.append(f"{cid}: already fixed by v{version}; excluded from the Nominated/Filed cases")
+    if len(misses) < N_NOMINATED + N_FILED:
+        raise RuntimeError(f"only {len(misses)} demo claims are real misses under v{version}; need "
+                           f"{N_NOMINATED + N_FILED}. Nothing left worth demonstrating")
+    chosen = misses[:N_NOMINATED + N_FILED]
+    for cid in chosen:
+        c, doc = _BY_ID[cid], docs[cid]
         reason = c["reason"] or f"agent recommended {doc['recommendation']} but reviewer approved"
-        case = court.nominate(c["id"], c["source"], reason)
-        if c["seed_case"] == "filed" and case["status"] == "nominated":
+        case = court.nominate(cid, c["source"], reason)
+        if chosen.index(cid) >= N_NOMINATED and case["status"] == "nominated":
             _file(court, case["case_id"])
     counts = {}
     for case in court.list_cases():
@@ -221,6 +334,14 @@ def run(db, store, scenario: str = DEFAULT_SCENARIO, pace: float = 2.0, ui_url: 
     if scenario not in SCENARIOS:
         raise ValueError(f"unknown scenario {scenario!r}; choose from {sorted(SCENARIOS)}")
     sc = SCENARIOS[scenario]
+    live_version, live_manifest = _active(store)
+    if scenario_fixed(live_manifest, scenario):
+        left = [f"{n} ({', '.join(k for k in SCENARIOS[n]['keywords'] if not _covered(live_manifest, k))})"
+                for n in SCENARIOS if not scenario_fixed(live_manifest, n)]
+        raise AlreadyFixed(f"scenario {scenario} is already fixed by v{live_version} (the live policy already "
+                           f"has {', '.join(sc['keywords'])}); " + (
+                               f"choose another scenario: {', '.join(left)}" if left
+                               else "no scenario has anything left to fix"))
     if not db[POLICY_COLLECTION].find_one({"policy_number": POLICY_NUMBER}):
         raise RuntimeError("demo data not found; run `demo seed` first")
     pending = candidates(store)
@@ -229,24 +350,28 @@ def run(db, store, scenario: str = DEFAULT_SCENARIO, pace: float = 2.0, ui_url: 
         raise RuntimeError(f"candidate version {vs} is already awaiting approval; approve or reject it in the "
                            "Regression Court (Policy versions) first, then run the demo again")
     say = lambda t="": _say(out, pace, t, sleep)  # noqa: E731
-    live_version, _ = _active(store)
     court = CourtDocket(db)
     say(f"=== Simulated incident stream: {sc['title']} (scenario {scenario}) ===")
     say(f"Live policy is v{live_version}. Everything below is a SIMULATION on demo data (CLM-SIM-*).")
 
     say("\n[1/6] Incident detected")
     claims = {}
-    for cid, expected, _crit in sc["claims"]:
+    for cid, expected, _crit in list(sc["claims"]):
         claims[cid] = _clean(db[CLAIMS_COLLECTION].find_one({"claim_id": cid}))
         if claims[cid] is None:
             raise RuntimeError(f"claim {cid} missing; run `demo seed` first")
         cl = claims[cid]
+        if expected != AUTO and _label(cl, live_manifest) != "real miss":
+            say(f"  {cid}: already handled by v{live_version}, left out of this scenario")
+            claims.pop(cid)
+            continue
         say(f"  {cid}  ${cl['claim_amount']:,.0f}  agent said {cl['recommendation']}, claim paid, later flagged wrong")
         say(f"      \"{cl['description']}\"")
 
+    in_scope = [t for t in sc["claims"] if t[0] in claims]
     say("\n[2/6] Nominate to the Regression Court")
     cases = {}
-    for cid, _e, _c in sc["claims"]:
+    for cid, _e, _c in in_scope:
         meta = _BY_ID[cid]
         reason = meta["reason"] or f"agent recommended {claims[cid]['recommendation']} but reviewer approved"
         cases[cid] = court.nominate(cid, meta["source"], reason)
@@ -263,7 +388,7 @@ def run(db, store, scenario: str = DEFAULT_SCENARIO, pace: float = 2.0, ui_url: 
 
     say(f"\n[4/6] SIMULATED adjuster verdict by '{SIMULATED_ADJUSTER}' (not a real person)")
     verdicts = []
-    for cid, expected, critical in sc["claims"]:
+    for cid, expected, critical in in_scope:
         case = cases[cid]
         if case["status"] != "filed":
             say(f"  {cid}: skipped, case is {case['status']}")
@@ -319,12 +444,17 @@ def status(db, store, out=print) -> dict:
     out(f"demo policy {POLICY_NUMBER}: {'present' if pol else 'absent'}")
     claims = [_clean(c) for c in db[CLAIMS_COLLECTION].find({"claim_id": {"$in": CLAIM_IDS}})]
     out(f"demo claims ({len(claims)}):")
+    _v, manifest = _active(store)
+    labels = {c["claim_id"]: ("control" if EXPECTED[c["claim_id"]] == AUTO else _label(c, manifest, pol))
+              for c in claims}
     for c in sorted(claims, key=lambda c: c["claim_id"]):
-        out(f"  {c['claim_id']}  ${c['claim_amount']:,.0f}  agent={c['recommendation']}  {c['resolution']}")
+        out(f"  {c['claim_id']}  ${c['claim_amount']:,.0f}  agent={c['recommendation']}  {c['resolution']}  "
+            f"[{labels[c['claim_id']]}]")
     cases = [c for c in CourtDocket(db).list_cases() if c["claim_id"] in CLAIM_IDS]
     out(f"demo court cases ({len(cases)}):")
     for c in sorted(cases, key=lambda c: c["claim_id"]):
-        out(f"  {c['case_id']}  {c['claim_id']}  {c['status']}  ({c['source']})")
+        out(f"  {c['case_id']}  {c['claim_id']}  {c['status']}  ({c['source']})  "
+            f"{labels.get(c['claim_id'], 'claim missing')} under the live policy")
     active = store.get_active()
     out(f"live version: {('v%s' % active['version']) if active else 'none'}")
     cands = candidates(store)
@@ -333,6 +463,7 @@ def status(db, store, out=print) -> dict:
     if not cands:
         out("candidate version: none")
     return {"policy": bool(pol), "claims": len(claims), "cases": len(cases),
+            "case_labels": {c["claim_id"]: labels.get(c["claim_id"]) for c in cases},
             "live": active["version"] if active else None, "candidates": [v["version"] for v in cands]}
 
 
@@ -394,6 +525,9 @@ def demo_main(a, rest) -> int:
             status(db, store)
         else:
             reset(db, store, actor, confirmed=a.yes)
+    except AlreadyFixed as e:
+        print(f"demo: {e}")
+        return 0
     except RuntimeError as e:
         print(f"demo: {e}", file=sys.stderr)
         return 1

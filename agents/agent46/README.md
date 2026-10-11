@@ -203,6 +203,14 @@ Scenarios (each stores a candidate; the first three pass the gate, the last is a
 proposal also carries the existing dev fixes (arson, submerged, hit and run, no witnesses, a threshold), so it needs approval.
 Approve or reject a candidate before the next `demo run`.
 
+The seed adapts to the live policy: each claim's stored recommendation comes from the real risk function under the current active
+manifest, and if a claim's wording is already handled (for example `staged` is now a keyword) it switches to an alternative natural
+wording that the live policy still misses. A claim with no such wording is reported as already fixed and replaced in the
+Nominated/Filed set by another claim, so the 3 Nominated + 2 Filed cases are always real misses. `demo run` on a scenario whose
+keyword is already live prints `already fixed by vN; choose another scenario: ...` and creates nothing. `demo status` labels each
+case `real miss` or `already handled` under the live policy. If claims were seeded under an older policy, `demo reset --yes` then
+`demo seed` refreshes them.
+
 To point it at Atlas, run these yourself (`!` prefix in the Claude Code prompt) with `--uri` or `EVOLVE_MONGODB_URI` set to the Atlas
 URI; mutating commands need `--allow-remote`, and so does the UI:
 

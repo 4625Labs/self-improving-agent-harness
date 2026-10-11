@@ -175,3 +175,42 @@ Review the plan, then run this yourself in the Claude Code prompt (the `! ` pref
 
 It refuses (exit 2) on unknown target versions or conflicting manifests (`--force` overrides only those), is idempotent,
 verifies the target after writing, and records one `atlas_sync.manifests` row in the target's `audit_log`.
+
+## Judge demo
+
+A simulated production incident stream that ends at a human approval in the Regression Court. Everything it creates is tagged
+`demo` (claims `CLM-SIM-*`, policy `POL-SIM-DEMO`, their court cases, and the candidate version it stores). The adjuster verdict is
+simulated and labelled so in the audit log (`Demo Adjuster (simulated)`). It uses the rule-based proposer only (no LLM) and never
+approves, activates or rolls back a version: that is your click. It refuses to run while a candidate is already awaiting approval.
+
+```
+cd agents/agent46
+uv run python -m harness_evolve.cli demo seed                       # 3 Nominated + 2 Filed cases, 10 claims
+uv run python -m harness_evolve.court_ui --port 8765                # open http://127.0.0.1:8765 in a browser
+uv run python -m harness_evolve.cli demo run --scenario parts-theft # narrated; --pace 2 by default
+```
+
+Then in the browser: Policy versions, find the new candidate, approve it. Afterwards:
+
+```
+uv run python -m harness_evolve.cli demo status
+uv run python -m harness_evolve.cli demo reset --yes                # removes only demo data; rejects an unapproved demo candidate
+```
+
+Scenarios (each stores a candidate; the first three pass the gate, the last is a rejected-proposal demo):
+`parts-theft` ('stripped', 'cannibalized'), `staged-accident` ('staged'), `cloned-vehicle` ('cloned'), `abandoned-lookalike`
+('abandoned', rejected: it also catches legitimate claims that only mention the word). If the live policy is still the baseline the
+proposal also carries the existing dev fixes (arson, submerged, hit and run, no witnesses, a threshold), so it needs approval.
+Approve or reject a candidate before the next `demo run`.
+
+To point it at Atlas, run these yourself (`!` prefix in the Claude Code prompt) with `--uri` or `EVOLVE_MONGODB_URI` set to the Atlas
+URI; mutating commands need `--allow-remote`, and so does the UI:
+
+```
+! cd agents/agent46 && uv run python -m harness_evolve.cli demo seed --allow-remote
+! cd agents/agent46 && uv run python -m harness_evolve.court_ui --port 8765 --allow-remote
+! cd agents/agent46 && uv run python -m harness_evolve.cli demo run --scenario staged-accident --allow-remote
+! cd agents/agent46 && uv run python -m harness_evolve.cli demo reset --yes --allow-remote
+```
+
+`demo run` convicts the scenario's cases into `evals/scenarios/docket.json` (through the court, audited); `demo reset` retracts them.

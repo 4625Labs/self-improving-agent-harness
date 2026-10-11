@@ -1,4 +1,4 @@
-"""uv run python -m harness_evolve.cli [--uri U] [--db D] [--proposer heuristic|llm] cycle|status|approve V --yes|rollback V --yes|reject V --yes|court ...|budget|audit [--n N]
+"""uv run python -m harness_evolve.cli [--uri U] [--db D] [--proposer heuristic|llm] cycle|status|approve V --yes|rollback V --yes|reject V --yes|court ...|demo seed|run|status|reset --yes|budget|audit [--n N]
 
 Mutating commands need --allow-remote (or EVOLVE_ALLOW_REMOTE=1) for a non-local Mongo host; destructive ones
 (approve, rollback, reject, court verdict, court dismiss) also need --yes. Every attempt is written to audit_log."""
@@ -157,7 +157,7 @@ def main(argv=None) -> int:
     p.add_argument("--allow-remote", action="store_true",
                    help="allow mutating commands against a non-local Mongo host (or set EVOLVE_ALLOW_REMOTE=1)")
     p.add_argument("--n", type=int, default=20, help="rows for the `audit` command (default 20)")
-    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "reject", "court", "budget", "audit", "atlas-sync"])
+    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "reject", "court", "budget", "audit", "atlas-sync", "demo"])
     p.add_argument("version", nargs="?")  # int for approve/rollback/reject; the court action word for `court`
     a, rest = p.parse_known_args(argv)
     try:
@@ -168,6 +168,10 @@ def main(argv=None) -> int:
 
 
 def _run(p, a, rest) -> int:
+    if a.command == "demo":
+        from .demo import demo_main
+
+        return demo_main(a, ([a.version] if a.version else []) + rest)
     if a.command == "court":
         return _court_main(a, ([a.version] if a.version else []) + rest)
     if a.version is not None:

@@ -37,3 +37,12 @@ build
 # Keys & certificates (also always excluded as an un-removable floor)
 *.pem
 *.key
+
+# Never ship conversation content, model replies or human ground truth to the platform.
+logs/
+.evolve_cache/
+evals/scenarios/docket.json
+
+# Host-side tooling and tests do not run in the deployed agent (HANDOFF section 4).
+harness_evolve/
+tests/

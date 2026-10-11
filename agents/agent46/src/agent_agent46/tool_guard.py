@@ -16,7 +16,7 @@ tool (including LangGraph's GraphInterrupt from interrupt()) always propagate un
 import json
 import logging
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -104,13 +104,19 @@ def _denial(call: dict[str, Any]) -> ToolMessage:
 
 
 def guarded_tool_node(
-    tool_node: Any, get_allowed: Callable[[list[BaseMessage]], Iterable[str]]
+    tool_node: Any,
+    get_allowed: Callable[[list[BaseMessage]], Iterable[str]],
+    *,
+    intent_of: Callable[[list[BaseMessage]], Optional[str]] | None = None,
 ) -> Callable[..., Any]:
     """Wrap a ToolNode so calls to non-allowed tools are denied instead of executed.
 
     get_allowed receives the history BEFORE the last AIMessage (so the call being vetted does not
     influence its own intent classification, matching what the agent node saw when it chose it).
     With no denied calls the original state goes straight to the wrapped node, unchanged.
+
+    Optional intent_of (same history argument) only labels the tool_denied telemetry event. It is
+    called only when a call is denied, and its failures are ignored.
     """
 
     def node(state: dict[str, Any], config: RunnableConfig | None = None) -> Any:
@@ -125,10 +131,19 @@ def guarded_tool_node(
         if not denied_ids:
             return tool_node.invoke(state, config)
 
+        intent: Optional[str] = None
+        if intent_of is not None:
+            try:
+                intent = intent_of(messages[:-1])
+            except Exception:
+                logger.debug("Could not resolve intent for denied tool telemetry", exc_info=True)
+        session_id = state.get("session_id") if isinstance(state, dict) else None
         for c in calls:
             if c["id"] in denied_ids:
                 logger.warning(f"Denied call to tool not allowed for this request: {c.get('name')}")
-                observability.tool_denied(c.get('name'))
+                observability.tool_denied(
+                    c.get("name"), intent=intent, session_id=session_id or None
+                )
 
         kept = [c for c in calls if c["id"] not in denied_ids]
         by_id: dict[str, Any] = {}

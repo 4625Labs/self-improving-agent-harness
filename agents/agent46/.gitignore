@@ -30,3 +30,6 @@ logs/
 # Keep the committed template for .env
 !env.example
 !.env.example
+
+# LLM proposer response cache
+.evolve_cache/

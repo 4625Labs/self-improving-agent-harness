@@ -26,15 +26,33 @@ def main(argv=None) -> int:
     p.add_argument("--proposer", choices=["heuristic", "llm"], default="heuristic")
     p.add_argument("--surface", choices=["risk", "tools", "all"], default="all",
                    help="which harness surface a cycle may change (both are always evaluated and gated)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with `cycle --proposer llm`: print the prompt and a token estimate, make no call, exit")
+    p.add_argument("--max-tokens", type=int, default=600, help="LLM output cap (default 600)")
+    p.add_argument("--max-failures", type=int, default=8, help="max failing scenarios in the LLM prompt (default 8)")
     p.add_argument("--auto-activate-low-risk", action="store_true")
     p.add_argument("command", choices=["cycle", "status", "approve", "rollback"])
     p.add_argument("version", nargs="?", type=int)
     a = p.parse_args(argv)
+    if a.dry_run:
+        if a.command != "cycle" or a.proposer != "llm":
+            p.error("--dry-run only applies to `cycle --proposer llm`")
+        from agent_agent46.harness_config import DEFAULT_MANIFEST
+        from evals.run_eval import evaluate
+        from evals.tool_eval import evaluate_tools
+
+        proposer = LLMProposer(max_tokens=a.max_tokens, max_failures=a.max_failures)
+        risk, tools = evaluate(DEFAULT_MANIFEST, "dev"), evaluate_tools(DEFAULT_MANIFEST, "dev")
+        info = proposer.dry_run(DEFAULT_MANIFEST, risk["failures"], {k: v for k, v in risk.items() if k != "failures"},
+                                tool_failures=tools["failures"])
+        print(info.pop("prompt"))
+        print(json.dumps(info, indent=2))
+        return 0
     store = HarnessConfigStore(a.uri, a.db)
     store.seed_if_empty()
     if a.command == "cycle":
         if a.proposer == "llm":
-            proposer = LLMProposer()
+            proposer = LLMProposer(max_tokens=a.max_tokens, max_failures=a.max_failures)
         elif a.surface == "risk":
             proposer = HeuristicProposer()
         elif a.surface == "tools":

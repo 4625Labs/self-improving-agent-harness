@@ -93,7 +93,7 @@ def test_docket_renders(tmp_path):
     c, _ = _make(tmp_path)
     r = c.get("/")
     assert r.status_code == 200
-    for s in ("Nominated", "Filed", "Convicted / Dismissed", "Scan for disagreements", "Trial", "v1"):
+    for s in ("Nominated", "Filed", "Convicted / Dismissed", "Scan for disagreements", "Policy scorecard", "v1"):
         assert s in r.text
     assert "http://" not in r.text.replace("http://www.w3.org", "") and "https://" not in r.text
 
@@ -143,7 +143,7 @@ def test_llm_path_dry_run_only_until_confirm(tmp_path):
     c, calls = _make(tmp_path)
     c.get("/")
     html = _post(c, "/cycle", proposer="llm").text
-    assert calls == [] and "no model call was made" in html and "Call the model" in html
+    assert calls == [] and "no model call was made" in html and "Ask the AI model now" in html
     assert "prompt tokens" in html
     html = _post(c, "/cycle", proposer="llm", action="llm_call").text
     assert len(calls) == 1 and "cycle finished" in html
@@ -153,7 +153,7 @@ def test_heuristic_cycle_and_approve_reject(tmp_path):
     c, calls = _make(tmp_path)
     html = _post(c, "/cycle", proposer="heuristic").text
     assert calls == [] and "cycle finished" in html
-    assert "Approve" in html or "no_change" in html
+    assert "Approve and go live" in html or "no_change" in html
     assert "not a candidate" in _post(c, "/version/1/reject", confirm="1").text
 
 
@@ -180,9 +180,9 @@ def test_dismiss_filed_case_needs_only_adjuster_and_forms_separate(tmp_path):
 
 def test_trial_shows_candidate_row_after_cycle(tmp_path):
     c, _ = _make(tmp_path)
-    assert "candidate (" not in c.get("/").text
+    assert "<td>Proposed change (awaiting approval)</td>" not in c.get("/").text
     html = _post(c, "/cycle", proposer="heuristic").text
-    assert "candidate (" in html and "held-out accuracy" in html
+    assert "<td>Proposed change (awaiting approval)</td>" in html and "Accuracy on unseen cases" in html
     assert "viewport" in html and "convicted:" not in html
 
 
@@ -227,12 +227,12 @@ def test_info_dialog_content_and_labels(tmp_path):
     html = c.get("/").text
     assert "<dialog" in html and 'aria-label="About Regression Court' in html and "alert(" not in html
     for s in ("Nominate", "Prove live", "Read the diff", "Verdict dropdown", "Critical", "adjuster", "Convict", "Dismiss",
-              "Overturn", "Retract", "confirm box", "History", "dev accuracy", "held-out accuracy", "dev n",
-              "critical violations", "over-esc.", "under-esc.", "gate", "Rollback to", "candidate", "rejected",
-              "expected-auto claims sent to a human anyway", "needed escalation but got a lighter outcome",
+              "Overturn", "Retract", "confirm box", "History", "Accuracy on known cases", "Accuracy on unseen cases", "Cases tested",
+              "Dangerous misses", "Unneeded reviews", "Missed escalations", "Safety check", "Make live again", "Awaiting approval", "Rejected",
+              "sent to a human anyway", "needed escalation but got a lighter outcome",
               "auto-approved"):
         assert s in html, s
-    for s in ("Nominated", "Filed", "Convicted and Dismissed", "Trial", "Versions", "Audit"):
+    for s in ("Nominated", "Filed", "Convicted and Dismissed", "Policy scorecard", "Policy versions", "Activity log"):
         assert f'aria-label="About {s}"' in html, s
 
 
@@ -240,8 +240,8 @@ def test_tabs_counts_and_collapsible_panels(tmp_path):
     c, _ = _make(tmp_path)
     html = c.get("/").text
     assert 'data-default="nominated"' in html and 'role="tablist"' in html
-    assert 'id="trial">' in html and "<details open><summary>Trial" in html
-    assert '<details><summary>Versions' in html and '<details><summary>Audit log' in html
+    assert 'id="trial">' in html and "<details open><summary>Policy scorecard" in html
+    assert '<details><summary>Policy versions' in html and '<details><summary>Activity log' in html
     assert "Scan" in html and 'class="ver"' in html
     _post(c, "/scan")
     _post(c, f"/case/{_case_id(c)}/file")
@@ -278,3 +278,94 @@ def test_script_in_claim_text_escaped_in_decided_tab(tmp_path):
     html = c.get("/").text
     assert "<script>alert(" not in html
     assert "&lt;script&gt;alert(2)&lt;/script&gt;" in html
+
+
+# ---- plain-language labels ----
+from harness_evolve.court_ui.app import UI_LABELS, _author_label, _pct  # noqa: E402
+
+
+def _flat(d):
+    for k, v in d.items():
+        if isinstance(v, dict):
+            yield from _flat(v)
+        else:
+            yield k, v
+
+
+
+def test_every_label_appears_on_page(tmp_path):
+    import html as htmllib
+    c, _ = _make(tmp_path)
+    _post(c, "/scan")
+    cid = _case_id(c)
+    _post(c, f"/case/{cid}/file")
+    _post(c, f"/case/{cid}/verdict", action="verdict", expected="manual_review_required", critical="1",
+          adjuster="Ann", confirm="1")
+    _post(c, "/cycle", proposer="heuristic")
+    html = htmllib.unescape(_post(c, "/cycle", proposer="llm").text)
+    for key, label in _flat(UI_LABELS):
+        if key in ("row_candidate", "author_limits"):  # shown only in special cases
+            continue
+        assert label in html, (key, label)
+    assert "<td>Proposed change (awaiting approval)</td>" in html
+
+
+def test_status_and_author_mapping_renders(tmp_path):
+    c, _ = _make(tmp_path)
+    html = _post(c, "/cycle", proposer="heuristic").text
+    assert ">Live</span>" in html and "Original" in html and "Awaiting approval" in html
+    assert 'class="badge b-active">Live<' in html and 'class="badge b-candidate">Awaiting approval<' in html
+    assert "Rule-based proposer" in html and "proposer:heuristic" not in html.split('id="versions"')[1]
+    for raw, nice in (("human", "Original"), ("proposer:heuristic", "Rule-based proposer"), ("proposer:llm", "AI model"),
+                      ("proposer:tool-heuristic", "Tool-access proposer"), ("weird", "weird"),
+                      ("proposer:heuristic+tool-heuristic", "Rule-based proposer, Tool-access proposer")):
+        assert _author_label(raw) == nice
+    assert UI_LABELS["status"] == {"active": "Live", "retired": "Previous", "candidate": "Awaiting approval",
+                                   "rejected": "Rejected"}
+
+
+def test_percent_formatting_and_header_tooltips(tmp_path):
+    assert _pct(0.79) == "79%" and _pct(1) == "100%" and _pct(0) == "0%" and _pct(None) == "-"
+    c, _ = _make(tmp_path)
+    html = c.get("/").text
+    import re
+    row = html.split('id="trial"')[1].split("</table>")[0]
+    assert re.search(r"<td>\d+%</td>", row)
+    assert f'title="{UI_LABELS["tip_critical"]}"' in html and "case marked critical that the policy would auto-approve" in html
+    assert "must never be auto-approved" in html
+
+
+def test_gate_badge_and_critical_badge(tmp_path):
+    c, _ = _make(tmp_path)
+    html = _post(c, "/cycle", proposer="heuristic").text
+    assert 'class="badge b-active">Passed<' in html or 'class="badge b-rejected">Failed<' in html
+    from jinja2 import Environment
+    from harness_evolve.court_ui import app as appmod
+    tpl = appmod.TEMPLATE
+    assert 'gate == "pass"' in tpl and "L.gate_pass" in tpl and "L.gate_fail" in tpl
+    assert "r.critical_violations %}<span class=\"badge b-critical\">" in tpl
+
+
+def test_all_forms_carry_csrf_and_confirm(tmp_path):
+    import re
+    c, _ = _make(tmp_path)
+    _seed_decided(c, n=4)
+    _post(c, "/nominate", claim_id="CLM1", reason="again")
+    html = _post(c, "/cycle", proposer="llm").text
+    forms = re.findall(r"<form .*?</form>", html, re.S)
+    assert len(forms) >= 10
+    for f in forms:
+        assert f'name="csrf" value="{TOKEN}"' in f, f[:80]
+        if "/verdict" in f or "/overturn" in f or "/retract" in f or "/version/" in f:
+            assert 'name="confirm"' in f, f[:80]
+    html = _post(c, "/cycle", proposer="heuristic").text
+    for f in re.findall(r"<form [^>]*/version/.*?</form>", html, re.S):
+        assert 'name="confirm"' in f and 'name="csrf"' in f
+
+
+def test_script_in_claim_text_still_escaped_with_new_labels(tmp_path):
+    c, _ = _make(tmp_path, desc="<script>alert(1)</script>")
+    _post(c, "/scan")
+    _post(c, f"/case/{_case_id(c)}/file")
+    html = _post(c, "/cycle", proposer="heuristic").text
+    assert "<script>alert(1)</script>" not in html and "&lt;script&gt;alert(1)" in html

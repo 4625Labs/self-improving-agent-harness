@@ -171,4 +171,4 @@ def test_ui_audit_rows_escaped_in_collapsed_details(tmp_path):
     audit.record(db, "x", "<script>alert(1)</script>", "t", {"k": "<b>"}, "ok")
     html = c.get("/").text
     assert "<script>alert(1)" not in html and "&lt;script&gt;alert(1)&lt;/script&gt;" in html
-    assert "<details><summary>Audit log" in html
+    assert "<details><summary>Activity log" in html

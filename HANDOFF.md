@@ -456,6 +456,13 @@ The verify-in-five-minutes numbers above hold only with an empty docket. Run the
 - **A nominated claim id cannot be re-nominated** after its case is dismissed. Give the corrected
   scenario a new claim id.
 - **The app logs the human-review pause (`GraphInterrupt`) at ERROR.** It is not a failure.
+- **A platform Policy Engine can deny your tools in the cloud and not locally.** An `AUTHORIZED_TOOLS`
+  allowlist (project or organization scope; Manage > Policies) makes the Orchestration Engine halt a run
+  with `POLICY_DENIED` the first time the agent calls a tool the list omits. Local dev does not enforce it.
+  Symptom: the playground trace shows BLOCKED on memory and policy tools, the logs show
+  `AUTHORIZED_TOOLS policy denied tool "<name>"`. An organization policy cannot be widened from the
+  project. The same engine has run caps (`MAX_TOOL_CALLS_PER_EXECUTION` and others) that overlap with the
+  evolvable limits in section 5. This is not caused by `features.guardrails`, which is content guardrails.
 - **Atlas from the host can fail transiently.** A first connection saw only one of three nodes
   (`ReplicaSetNoPrimary`); a retry minutes later reached the primary. Retry before changing anything.
 - **A permission classifier may refuse writes to shared resources** (a cloud secret that sends
@@ -611,3 +618,51 @@ Things learned while deploying:
   Create a separate Atlas user for the evolve tooling.
 - `agentengine status` kept showing the previous deployment id after a successful redeploy.
   Trust `agentengine deploy` output and `egress`, not that line.
+
+
+---
+
+## 10. The judge demo, the court UI and the cloud proof
+
+### Court UI (harness_evolve/court_ui)
+
+Plain-language labels live in one dict, `UI_LABELS`: *Policy scorecard* (Original rules / Live policy /
+Proposed change; accuracy on known and unseen cases, dangerous misses, unneeded reviews, missed
+escalations, a Passed or Failed safety check), *Policy versions* (Live, Previous, Awaiting approval,
+Rejected), tabs for Nominated, Filed and Decided with count badges, info icons and a dialog that explain
+every field. Every candidate version, whether proposed in the browser or created by the command line,
+shows a summary card: bullet list of what would change (reconstructed from the manifest diff against
+its parent by `ops_from_manifests`), an amber "Loosens a safeguard" badge for raised thresholds and
+limits, the score impact, collapsed evidence, and Approve and Reject with a confirm box. Page height
+on a 27-case docket fell from 6,274 px to 1,582 px at 1280 px.
+
+### Simulated incident stream (`demo`)
+
+```bash
+cli demo seed        # fresh POL-SIM-DEMO, 10 claims, 3 Nominated + 2 Filed cases (tagged demo)
+cli demo run --scenario staged-accident --pace 2   # narrated; stops at "waiting for a human"
+cli demo status
+cli demo reset --yes # removes only demo data, retracts simulated convictions, rejects a demo candidate
+```
+
+Scenarios: `parts-theft`, `staged-accident`, `cloned-vehicle` (each proposes one keyword and passes the
+gate) and `abandoned-lookalike`, a plausible patch that the gate **rejects** (accuracy 0.862 to 0.793,
+unneeded reviews 0.167 to 0.417). The verdicts are given by "Demo Adjuster (simulated)" and are labelled
+that way in the audit log. The command never approves, activates or rolls back; it refuses while a
+candidate is waiting.
+
+### Run against Atlas
+
+Same commands with `--allow-remote --db <ATLAS_EVOLVE_DB>` and `EVOLVE_MONGODB_URI` set to the Atlas
+string. Use a separate docket copy (`EVOLVE_DOCKET_PATH=.evolve_cache/atlas_docket.json`, a copy of the
+real docket) so simulated verdicts never enter the real `docket.json`. Start the court against Atlas on
+its own port: `court_ui --allow-remote --db <db> --port 8766`. Played once on 2026-10-11: staged-accident
+produced candidate v7 (`add_keyword staged`, low risk, gate pass), the operator approved it, and the
+audit log reads `demo.simulated_verdict`, `demo.run`, `manifest.approve`.
+
+### Cloud proof
+
+The deployed agent logged `Harness manifest version: 7` and `Tool access: intent=claims, offered 14/17
+tools`, so it reads the active manifest from Atlas. The first staged-collision claim sent through the
+hosted chat was stopped by the platform's `AUTHORIZED_TOOLS` policy (see section 6), before any claim
+was written; clearing that policy is an administrator action in the platform UI.

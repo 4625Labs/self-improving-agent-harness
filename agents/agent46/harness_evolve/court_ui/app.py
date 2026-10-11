@@ -21,8 +21,9 @@ from markupsafe import Markup  # noqa: E402
 from evals.run_eval import evaluate  # noqa: E402
 from evals.tool_eval import evaluate_tools  # noqa: E402
 from agent_agent46.policy_store import CLAIMS_COLLECTION  # noqa: E402
+from harness_evolve import audit  # noqa: E402
 from harness_evolve.court import VALID_RECOMMENDATIONS, CourtDocket  # noqa: E402
-from harness_evolve.loop import approve, rollback, run_cycle  # noqa: E402
+from harness_evolve.loop import approve, reject, rollback, run_cycle  # noqa: E402
 from harness_evolve.proposer import (  # noqa: E402
     CompositeProposer,
     HeuristicProposer,
@@ -48,7 +49,7 @@ button{cursor:pointer;padding:4px 10px}input[type=text],select{padding:3px}
 pre{background:#f0f0ea;padding:8px;overflow:auto;white-space:pre-wrap;max-height:260px}
 table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:3px 8px;text-align:left}
 form.inline{display:inline}.panel{margin-top:14px}
-.cap{color:#555;font-size:12px;margin:-4px 0 8px}.how{background:#eef3f8;border-color:#c9d6e3;margin:0 0 14px}
+.confirm{font-size:12px;margin:0 6px;white-space:nowrap}.cap{color:#555;font-size:12px;margin:-4px 0 8px}.how{background:#eef3f8;border-color:#c9d6e3;margin:0 0 14px}
 .how p{margin:4px 0}.err-inline{color:#a11;background:#f9e0e0;border-radius:4px;padding:3px 8px;margin:4px 0;font-size:13px}
 .hide{display:none}details summary{cursor:pointer;color:#245}.reason{max-width:360px;overflow-wrap:anywhere}
 .tw{overflow-x:auto;max-width:100%}.tw th,.tw td{white-space:nowrap}.tw td.reason{white-space:normal;min-width:200px}section,.panel,.case{min-width:0;overflow-wrap:anywhere}
@@ -75,6 +76,7 @@ whether a proposed harness change is safe, and a human approves it before it goe
 <form method="post" action="/case/{{ c.case_id }}/file" class="inline">{{ tok() }}<button>File case</button></form>
 <form method="post" action="/case/{{ c.case_id }}/verdict" class="inline adj" novalidate>{{ tok() }}
 <input type="hidden" name="action" value="dismiss"><input type="text" name="adjuster" placeholder="adjuster">
+<label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label>
 <button>Dismiss</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form></div>{% else %}<p class="muted">None.</p>{% endfor %}</section>
 
 <section><h2>Filed ({{ filed|length }})</h2><p class="cap">Case file built, awaiting adjuster verdict.</p>
@@ -95,11 +97,13 @@ whether a proposed harness change is safe, and a human approves it before it goe
 <select name="expected"><option value="">expected...</option>
 {% for r in recs %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select>
 <label><input type="checkbox" name="critical" value="1"> Critical</label><br>
-<input type="text" name="adjuster" placeholder="adjuster (required)">
+<input type="text" name="adjuster" placeholder="adjuster (required)"><br>
+<label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label>
 <button>Convict</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form>
 <form method="post" action="/case/{{ c.case_id }}/verdict" class="adj" novalidate style="margin-top:6px">{{ tok() }}
 <input type="hidden" name="action" value="dismiss">
 <input type="text" name="adjuster" placeholder="adjuster (required)">
+<label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label>
 <button>Dismiss</button><div class="err-inline hide" role="alert">Adjuster name is required.</div></form></div>
 {% else %}<p class="muted">None.</p>{% endfor %}</section>
 
@@ -132,13 +136,17 @@ by {{ c.verdict_by }}<br><span class="muted">Scenario written: {{ c.draft.id }} 
 <ul>{% for r in report.gate.reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
 {% if report.error %}<p class="err flash">{{ report.error }}</p>{% endif %}
 {% if report.status == "candidate" %}
-<form method="post" action="/version/{{ report.version }}/approve" class="inline">{{ tok() }}<button>Approve</button></form>
-<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<button>Reject</button></form>{% endif %}{% endif %}
+<form method="post" action="/version/{{ report.version }}/approve" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>Approve</button></form>
+<form method="post" action="/version/{{ report.version }}/reject" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>Reject</button></form>{% endif %}{% endif %}
 <h3>Versions</h3>
 <div class="tw"><table><tr><th>v</th><th>status</th><th>author</th><th>reason</th><th></th></tr>
 {% for v in versions %}<tr><td>{{ v.version }}</td><td>{{ v.status }}</td><td>{{ v.author }}</td><td class="reason">{% set rs = v.reason or "" %}{% if rs|length > 120 %}<details><summary>{{ rs[:120] }}...</summary>{{ rs }}</details>{% else %}{{ rs }}{% endif %}</td>
-<td>{% if v.status == "retired" %}<form method="post" action="/version/{{ v.version }}/rollback" class="inline">{{ tok() }}<button>Rollback to</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
+<td>{% if v.status == "retired" %}<form method="post" action="/version/{{ v.version }}/rollback" class="inline">{{ tok() }}<input type="text" name="reviewer" placeholder="reviewer"><label class="confirm"><input type="checkbox" name="confirm" value="1"> I understand this changes live state</label><button>Rollback to</button></form>{% endif %}</td></tr>{% endfor %}</table></div>
 </div>
+<div class="panel"><details><summary>Audit log (last {{ audit|length }})</summary>
+{% if audit %}<div class="tw"><table><tr><th>time (UTC)</th><th>action</th><th>actor</th><th>target</th><th>outcome</th><th>detail</th></tr>
+{% for r in audit %}<tr><td>{{ r.ts }}</td><td>{{ r.action }}</td><td>{{ r.actor }}</td><td>{{ r.target }}</td><td>{{ r.outcome }}</td><td class="reason">{{ r.detail }}</td></tr>{% endfor %}</table></div>
+{% else %}<p class="muted">No audit rows yet.</p>{% endif %}</details></div>
 <script>
 document.querySelectorAll("form.adj").forEach(function(f){f.addEventListener("submit",function(e){
 var a=f.querySelector("[name=adjuster]"),m=f.querySelector(".err-inline");
@@ -181,7 +189,7 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
     def guarded(fn: Callable[[], str]) -> RedirectResponse:
         try:
             return flash("ok", fn())
-        except (ValueError, RuntimeError) as e:
+        except (ValueError, RuntimeError) as e:  # includes ConfirmationRequired
             return flash("err", str(e))
 
     @app.get("/", response_class=HTMLResponse)
@@ -205,7 +213,7 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
             nominated=[c for c in cases if c["status"] == "nominated"],
             filed=[c for c in cases if c["status"] == "filed"],
             closed=[c for c in cases if c["status"] in ("convicted", "dismissed")],
-            recs=sorted(VALID_RECOMMENDATIONS), report=state["report"], dry=state["dry"], tok=tok)
+            recs=sorted(VALID_RECOMMENDATIONS), audit=audit.recent(db, 10), report=state["report"], dry=state["dry"], tok=tok)
 
     @app.post("/scan")
     async def scan(request: Request):
@@ -233,13 +241,14 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
         adjuster = f.get("adjuster", "").strip()
         if not adjuster:
             return flash("err", "adjuster name is required")
+        confirmed = f.get("confirm") == "1"
         if f.get("action") == "dismiss":
-            return guarded(lambda: f"dismissed case {court.dismiss(case_id, adjuster)['case_id']}")
+            return guarded(lambda: f"dismissed case {court.dismiss(case_id, adjuster, confirmed=confirmed)['case_id']}")
         expected = f.get("expected", "")
         if expected not in VALID_RECOMMENDATIONS:
             return flash("err", f"expected must be one of {sorted(VALID_RECOMMENDATIONS)}")
         return guarded(lambda: "verdict recorded; scenario written: "
-                       f"{court.verdict(case_id, expected, f.get('critical') == '1', adjuster)['draft']['id']}")
+                       f"{court.verdict(case_id, expected, f.get('critical') == '1', adjuster, confirmed=confirmed)['draft']['id']}")
 
     @app.post("/cycle")
     async def cycle(request: Request):
@@ -272,33 +281,33 @@ def create_app(db, store, *, token: str | None = None, llm_factory: Callable[[],
 
     @app.post("/version/{version}/approve")
     async def do_approve(version: int, request: Request):
-        await form(request)
+        f = await form(request)
+        confirmed, actor = f.get("confirm") == "1", f.get("reviewer", "").strip() or "ui-anonymous"
 
         def go() -> str:
-            approve(store, version)
+            approve(store, version, confirmed=confirmed, actor=actor, audit_db=db)
             state["report"] = None
             return f"v{version} is now active"
         return guarded(go)
 
     @app.post("/version/{version}/reject")
     async def do_reject(version: int, request: Request):
-        await form(request)
+        f = await form(request)
+        confirmed, actor = f.get("confirm") == "1", f.get("reviewer", "").strip() or "ui-anonymous"
 
         def go() -> str:
-            doc = store.get(version)
-            if not doc or doc["status"] != "candidate":
-                raise ValueError(f"version {version} is not a candidate")
-            store.set_status(version, "rejected")
+            reject(store, version, confirmed=confirmed, actor=actor, audit_db=db)
             state["report"] = None
             return f"v{version} rejected"
         return guarded(go)
 
     @app.post("/version/{version}/rollback")
     async def do_rollback(version: int, request: Request):
-        await form(request)
+        f = await form(request)
+        confirmed, actor = f.get("confirm") == "1", f.get("reviewer", "").strip() or "ui-anonymous"
 
         def go() -> str:
-            rollback(store, version)
+            rollback(store, version, confirmed=confirmed, actor=actor, audit_db=db)
             return f"rolled back to v{version}"
         return guarded(go)
 

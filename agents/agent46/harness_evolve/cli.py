@@ -1,4 +1,7 @@
-"""uv run python -m harness_evolve.cli [--uri U] [--db D] [--proposer heuristic|llm] cycle|status|approve V|rollback V"""
+"""uv run python -m harness_evolve.cli [--uri U] [--db D] [--proposer heuristic|llm] cycle|status|approve V --yes|rollback V --yes|reject V --yes|court ...|budget|audit [--n N]
+
+Mutating commands need --allow-remote (or EVOLVE_ALLOW_REMOTE=1) for a non-local Mongo host; destructive ones
+(approve, rollback, reject, court verdict, court dismiss) also need --yes. Every attempt is written to audit_log."""
 
 import argparse
 import json
@@ -10,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_agent46.harness_config import HarnessConfigStore  # noqa: E402
 
+from .audit import ConfirmationRequired, RemoteRefused, check_remote, os_user, recent  # noqa: E402
 from .budget import DailyBudget  # noqa: E402
-from .loop import approve, rollback, run_cycle  # noqa: E402
+from .loop import approve, reject, rollback, run_cycle  # noqa: E402
 from .proposer import DEFAULT_CACHE_DIR, CompositeProposer, HeuristicProposer, LLMProposer, ToolHeuristicProposer  # noqa: E402
 
 # Local Docker Mongo port is assigned per machine: check `agentengine dev status` and override
@@ -37,14 +41,19 @@ def _court_main(a, rest) -> int:
     v.add_argument("case_id")
     v.add_argument("expected")
     v.add_argument("--critical", action="store_true")
-    v.add_argument("--by", required=True)
+    v.add_argument("--by")
     d = sub.add_parser("dismiss")
     d.add_argument("case_id")
-    d.add_argument("--by", required=True)
+    d.add_argument("--by")
     d.add_argument("--note", default="")
     ls = sub.add_parser("list")
     ls.add_argument("--status")
     c = cp.parse_args(rest)
+    by = getattr(c, "by", None) or a.by or os_user()
+    if c.action in ("verdict", "dismiss") and not (getattr(c, "by", None) or a.by):
+        print(f"note: --by not given; recording actor as OS user '{by}'", file=sys.stderr)
+    if c.action != "list":
+        check_remote(a.uri, a.allow_remote)
     court = CourtDocket(MongoClient(a.uri, serverSelectionTimeoutMS=2000)[a.db])
     if c.action == "nominate":
         out = court.nominate(c.claim_id, "manual", c.reason)
@@ -53,9 +62,9 @@ def _court_main(a, rest) -> int:
     elif c.action == "file":
         out = court.file_case(c.case_id)
     elif c.action == "verdict":
-        out = court.verdict(c.case_id, c.expected, c.critical, c.by)
+        out = court.verdict(c.case_id, c.expected, c.critical, by, confirmed=a.yes)
     elif c.action == "dismiss":
-        out = court.dismiss(c.case_id, c.by, c.note)
+        out = court.dismiss(c.case_id, by, c.note, confirmed=a.yes)
     else:
         out = court.list_cases(c.status)
     print(json.dumps(out, indent=2, default=str))
@@ -74,11 +83,30 @@ def main(argv=None) -> int:
     p.add_argument("--max-tokens", type=int, default=600, help="LLM output cap (default 600)")
     p.add_argument("--max-failures", type=int, default=8, help="max failing scenarios in the LLM prompt (default 8)")
     p.add_argument("--auto-activate-low-risk", action="store_true")
-    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "court", "budget"])
-    p.add_argument("version", nargs="?", type=int)
+    p.add_argument("--yes", action="store_true",
+                   help="confirm a destructive action (approve, rollback, reject, court verdict/dismiss)")
+    p.add_argument("--by", help="actor recorded in the audit log (default: OS user)")
+    p.add_argument("--allow-remote", action="store_true",
+                   help="allow mutating commands against a non-local Mongo host (or set EVOLVE_ALLOW_REMOTE=1)")
+    p.add_argument("--n", type=int, default=20, help="rows for the `audit` command (default 20)")
+    p.add_argument("command", choices=["cycle", "status", "approve", "rollback", "reject", "court", "budget", "audit"])
+    p.add_argument("version", nargs="?")  # int for approve/rollback/reject; the court action word for `court`
     a, rest = p.parse_known_args(argv)
+    try:
+        return _run(p, a, rest)
+    except (ConfirmationRequired, RemoteRefused) as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+
+
+def _run(p, a, rest) -> int:
     if a.command == "court":
-        return _court_main(a, rest)
+        return _court_main(a, ([a.version] if a.version else []) + rest)
+    if a.version is not None:
+        try:
+            a.version = int(a.version)
+        except ValueError:
+            p.error(f"invalid version: {a.version!r}")
     if rest:
         p.error(f"unrecognized arguments: {' '.join(rest)}")
     if a.command == "budget":  # before the store is reached: no Mongo needed
@@ -102,6 +130,13 @@ def main(argv=None) -> int:
         print(info.pop("prompt"))
         print(json.dumps(info, indent=2))
         return 0
+    if a.command == "audit":  # read-only
+        from pymongo import MongoClient
+
+        print(json.dumps(recent(MongoClient(a.uri, serverSelectionTimeoutMS=2000)[a.db], a.n), indent=2, default=str))
+        return 0
+    if a.command in ("cycle", "approve", "rollback", "reject"):
+        check_remote(a.uri, a.allow_remote)
     store = HarnessConfigStore(a.uri, a.db)
     store.seed_if_empty()
     if a.command == "cycle":
@@ -126,7 +161,8 @@ def main(argv=None) -> int:
     else:
         if a.version is None:
             p.error(f"{a.command} needs a version")
-        (approve if a.command == "approve" else rollback)(store, a.version)
+        fn = {"approve": approve, "rollback": rollback, "reject": reject}[a.command]
+        fn(store, a.version, confirmed=a.yes, actor=a.by or os_user())
         out = {"ok": True, "active": store.get_active()["version"]}
     print(json.dumps(out, indent=2, default=str))
     return 0

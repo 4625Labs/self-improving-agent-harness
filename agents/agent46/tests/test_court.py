@@ -77,21 +77,21 @@ def test_unconvicted_never_in_docket(court):
     c = court.nominate("CLM1", "manual", "x")
     court.file_case(c["case_id"])
     d = court.nominate("CLM3", "manual", "x")
-    court.dismiss(d["case_id"], "me", "nope")
+    court.dismiss(d["case_id"], "me", "nope", confirmed=True)
     assert not court.docket_path.exists() or json.loads(court.docket_path.read_text()) == []
 
 
 def test_verdict_rejected_unless_filed(court):
     c = court.nominate("CLM1", "manual", "x")
     with pytest.raises(ValueError):
-        court.verdict(c["case_id"], "auto_approve", False, "me")
+        court.verdict(c["case_id"], "auto_approve", False, "me", confirmed=True)
     assert not court.docket_path.exists()
 
 
 def test_verdict_invalid_expected(court):
     c = court.file_case(court.nominate("CLM1", "manual", "x")["case_id"])
     with pytest.raises(ValueError):
-        court.verdict(c["case_id"], "bogus", False, "me")
+        court.verdict(c["case_id"], "bogus", False, "me", confirmed=True)
 
 
 def test_file_case_draft(court):
@@ -104,10 +104,10 @@ def test_file_case_draft(court):
 
 def test_verdict_writes_valid_docket_no_duplicates(court):
     c = court.file_case(court.nominate("CLM1", "manual", "x")["case_id"])
-    out = court.verdict(c["case_id"], "auto_approve", True, "me")
+    out = court.verdict(c["case_id"], "auto_approve", True, "me", confirmed=True)
     assert out["status"] == "convicted"
     with pytest.raises(ValueError):
-        court.verdict(c["case_id"], "auto_approve", True, "me")
+        court.verdict(c["case_id"], "auto_approve", True, "me", confirmed=True)
     data = json.loads(court.docket_path.read_text())
     assert len(data) == 1 and data[0]["severity"] == "critical"
     for sc in data:
